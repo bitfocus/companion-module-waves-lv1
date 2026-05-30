@@ -1,0 +1,42 @@
+{
+	"name": "companion-module-waves-lv1",
+	"version": "1.0.0",
+	"description": "Companion module for Waves LV1 Mixer",
+	"main": "dist/main.js",
+	"type": "module",
+	"scripts": {
+		"format": "prettier -w .",
+		"package": "npm run build && companion-module-build",
+		"build": "rimraf dist && npm run build:main",
+		"build:main": "tsc -p tsconfig.build.json",
+		"dev": "tsc -p tsconfig.build.json --watch",
+		"lint:raw": "eslint",
+		"lint": "npm run lint:raw ."
+	},
+	"license": "MIT",
+	"author": "Miguel Lourenço <miguel123369@gmail.com>",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/miglourenco/companion-module-waves-lv1.git"
+	},
+	"bugs": {
+		"url": "https://github.com/miglourenco/companion-module-waves-lv1/issues"
+	},
+	"homepage": "https://github.com/miglourenco/companion-module-waves-lv1#readme",
+	"engines": {
+		"node": "^18.12 || ^20.0 || ^22.8"
+	},
+	"dependencies": {
+		"@companion-module/base": "~1.12.1"
+	},
+	"devDependencies": {
+		"@companion-module/tools": "^2.4.2",
+		"@types/node": "^18.19.30",
+		"eslint": "^9.39.0",
+		"prettier": "^3.6.2",
+		"rimraf": "^6.1.0",
+		"typescript": "~5.8.3",
+		"typescript-eslint": "^8.46.2"
+	},
+	"prettier": "@companion-module/tools/.prettierrc.json"
+}
