@@ -115,6 +115,7 @@ export function UpdateActions(self: LV1Instance): void {
 				const group = Number(a.options.group)
 				const ch = resolveChannel(a.options as Record<string, unknown>, group)
 				const v = Number(a.options.value)
+				self.applyChannelDelta(group, ch, { pan: v })
 				self.send('/Set/Track/Pan', [intCh(group), intCh(ch), { type: 'd', value: v }])
 			},
 		},
@@ -129,6 +130,7 @@ export function UpdateActions(self: LV1Instance): void {
 				const group = Number(a.options.group)
 				const ch = resolveChannel(a.options as Record<string, unknown>, group)
 				const v = Number(a.options.value)
+				self.applyChannelDelta(group, ch, { width: v })
 				self.send('/Set/Track/Pan/Width', [intCh(group), intCh(ch), { type: 'd', value: v }])
 			},
 		},

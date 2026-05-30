@@ -21,6 +21,10 @@ export function UpdateVariables(self: LV1Instance): void {
 		defs.push({ variableId: `${slug}_mute`,  name: `${label} — mute (on/off)` })
 		defs.push({ variableId: `${slug}_solo`,  name: `${label} — solo (on/off)` })
 		defs.push({ variableId: `${slug}_gain`,  name: `${label} — fader (dB)` })
+		defs.push({ variableId: `${slug}_pan`,   name: `${label} — pan (-1..+1)` })
+		defs.push({ variableId: `${slug}_width`, name: `${label} — stereo width (0..1)` })
+		defs.push({ variableId: `${slug}_vu`,    name: `${label} — VU meter, L/mono (dB, ~0.8 Hz)` })
+		defs.push({ variableId: `${slug}_vu_r`,  name: `${label} — VU meter, R of stereo (dB)` })
 		defs.push({ variableId: `${slug}_color`, name: `${label} — color (#RRGGBB)` })
 	}
 
@@ -55,7 +59,13 @@ export function pushAll(self: LV1Instance): void {
 		values[`${slug}_mute`]  = s?.muted ? 'on' : 'off'
 		values[`${slug}_solo`]  = s?.solo ? 'on' : 'off'
 		values[`${slug}_gain`]  = s?.gain != null ? s.gain.toFixed(1) : ''
+		values[`${slug}_pan`]   = s?.pan != null ? s.pan.toFixed(2) : ''
+		values[`${slug}_width`] = s?.width != null ? s.width.toFixed(2) : ''
 		values[`${slug}_color`] = s?.color ? toHex(s.color) : ''
+		const vuL = self.meters.get(`${group}.${ch}.0`)
+		const vuR = self.meters.get(`${group}.${ch}.1`)
+		values[`${slug}_vu`]    = vuL != null ? vuL.toFixed(1) : ''
+		values[`${slug}_vu_r`]  = vuR != null ? vuR.toFixed(1) : ''
 	}
 	values['tempo']          = self.lastTempoBpm != null ? self.lastTempoBpm.toFixed(1) : ''
 	values['scene_index']    = self.currentScene ?? ''
@@ -72,8 +82,8 @@ export function pushAll(self: LV1Instance): void {
 	self.setVariableValues(values)
 }
 
-/** Push a single track's mute/solo/gain/name/color value. Cheap — call from handleNotify. */
-export function pushTrack(self: LV1Instance, group: number, ch: number, prop: 'mute' | 'solo' | 'gain' | 'name' | 'color'): void {
+/** Push a single track's mute/solo/gain/pan/width/name/color value. Cheap — call from handleNotify. */
+export function pushTrack(self: LV1Instance, group: number, ch: number, prop: 'mute' | 'solo' | 'gain' | 'pan' | 'width' | 'name' | 'color'): void {
 	const slug = trackSlug(group, ch)
 	const s = self.channels.get(`${group}.${ch}`)
 	if (!s) return
@@ -81,6 +91,8 @@ export function pushTrack(self: LV1Instance, group: number, ch: number, prop: 'm
 	if (prop === 'mute')  v[`${slug}_mute`]  = s.muted ? 'on' : 'off'
 	if (prop === 'solo')  v[`${slug}_solo`]  = s.solo ? 'on' : 'off'
 	if (prop === 'gain')  v[`${slug}_gain`]  = s.gain != null ? s.gain.toFixed(1) : ''
+	if (prop === 'pan')   v[`${slug}_pan`]   = s.pan != null ? s.pan.toFixed(2) : ''
+	if (prop === 'width') v[`${slug}_width`] = s.width != null ? s.width.toFixed(2) : ''
 	if (prop === 'name')  v[`${slug}_name`]  = s.name ?? ''
 	if (prop === 'color') v[`${slug}_color`] = s.color ? toHex(s.color) : ''
 	self.setVariableValues(v)

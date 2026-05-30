@@ -19,6 +19,7 @@ import { discover } from './zdns-discover.js'
 import { ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
+import { trackSlug } from './tracks.js'
 
 interface ChannelState {
 	muted: boolean
@@ -26,6 +27,8 @@ interface ChannelState {
 	solo: boolean
 	color: { r: number; g: number; b: number } | null
 	name: string | null
+	pan: number    // -1 (full L) … +1 (full R), 0 = center
+	width: number  // 0 (mono) … 1 (full stereo)
 }
 interface SendState {
 	on: boolean
@@ -280,6 +283,27 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				pushTrackVariable(this, g, ch, 'mute')
 				break
 			}
+			case '/Notify/Track/Pan': {
+				// ,iid [g, ch, value(-1..+1)]
+				const g = intArg(m, 0), ch = intArg(m, 1)
+				const dArg = m.args[2]
+				const v = dArg?.type === 'd' || dArg?.type === 'f' ? (dArg.value as number) : null
+				if (g == null || ch == null || v == null) return
+				this.ensureChannel(g, ch).pan = v
+				pushTrackVariable(this, g, ch, 'pan')
+				break
+			}
+			case '/Notify/Track/Pan/Width':
+			case '/Notify/PanArcWidth': {
+				// Both observed in catalog; pick first numeric arg after g, ch.
+				const g = intArg(m, 0), ch = intArg(m, 1)
+				const dArg = m.args[2]
+				const v = dArg?.type === 'd' || dArg?.type === 'f' ? (dArg.value as number) : null
+				if (g == null || ch == null || v == null) return
+				this.ensureChannel(g, ch).width = v
+				pushTrackVariable(this, g, ch, 'width')
+				break
+			}
 			case '/Notify/Track/Out/Gain': {
 				const g = intArg(m, 0),
 					ch = intArg(m, 1)
@@ -465,7 +489,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			}
 			case '/Notify/Meters': {
 				// args[0] = count, then (g, ch, sub, dB-float) per meter.
+				// Batch the VU variable updates into one setVariableValues call (way faster
+				// than 121 individual sets per frame).
 				const args = m.args
+				const vuValues: Record<string, string> = {}
 				for (let i = 1; i + 3 < args.length; i += 4) {
 					const g = args[i].type === 'i' ? (args[i].value as number) : null
 					const ch = args[i + 1].type === 'i' ? (args[i + 1].value as number) : null
@@ -473,7 +500,14 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					const db = args[i + 3].type === 'f' ? (args[i + 3].value as number) : null
 					if (g == null || ch == null || sub == null || db == null) continue
 					this.meters.set(`${g}.${ch}.${sub}`, db)
+					// Only expose sub=0 (mono / left) and sub=1 (right of stereo) as variables.
+					if (sub === 0 || sub === 1) {
+						const slug = trackSlug(g, ch)
+						const suffix = sub === 0 ? '_vu' : '_vu_r'
+						vuValues[`${slug}${suffix}`] = db.toFixed(1)
+					}
 				}
+				if (Object.keys(vuValues).length > 0) this.setVariableValues(vuValues)
 				this.checkFeedbacks('meter')
 				break
 			}
@@ -648,7 +682,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		const key = `${group}.${ch}`
 		let s = this.channels.get(key)
 		if (!s) {
-			s = { muted: false, gain: 0, solo: false, color: null, name: null }
+			s = { muted: false, gain: 0, solo: false, color: null, name: null, pan: 0, width: 1 }
 			this.channels.set(key, s)
 		}
 		return s
@@ -668,7 +702,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.checkFeedbacks('channelSolo')
 			pushTrackVariable(this, group, ch, 'solo')
 		}
-		if (delta.gain != null) pushTrackVariable(this, group, ch, 'gain')
+		if (delta.gain != null)  pushTrackVariable(this, group, ch, 'gain')
+		if (delta.pan != null)   pushTrackVariable(this, group, ch, 'pan')
+		if (delta.width != null) pushTrackVariable(this, group, ch, 'width')
+		if (delta.name != null)  pushTrackVariable(this, group, ch, 'name')
 	}
 
 	applySendDelta(group: number, ch: number, aux: number, delta: Partial<SendState>): void {
