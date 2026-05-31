@@ -21,16 +21,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'npm'
+      - name: Prepare Environment
+        run: corepack enable
       - name: Install dependencies
-        run: npm ci
+        run: yarn install
         env:
           CI: true
       - name: Build and check types
-        run: npm run build
+        run: yarn build
         env:
           CI: true
       - name: Run lint
-        run: npm run lint
+        run: yarn lint
         env:
           CI: true

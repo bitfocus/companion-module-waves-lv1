@@ -46,9 +46,12 @@ See `companion/HELP.md` for the full reference.
 
 ## Building
 
+Requires **Node 22+** and **Yarn 4** (managed via Corepack):
+
 ```bash
-npm install
-npm run build
+corepack enable
+yarn install
+yarn build
 ```
 
 Output goes to `dist/`. To test in Companion locally, point Companion's
@@ -56,9 +59,9 @@ Output goes to `dist/`. To test in Companion locally, point Companion's
 `~/companion/modules-local/`).
 
 ```bash
-npm run dev          # tsc --watch
-npm run lint
-npm run package      # build + companion-module-build for distribution
+yarn dev          # tsc --watch
+yarn lint
+yarn package      # build + companion-module-build for distribution
 ```
 
 ## Repository layout
