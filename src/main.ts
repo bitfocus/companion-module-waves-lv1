@@ -67,6 +67,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  Example: { name: "Mon 1", func: "Flip Sends: MX1: Mon 1", assigned: true }. */
 	public userKeys = new Map<number, { name: string; func: string; assigned: boolean }>()
 
+	/** Spill button state per bank/idx. Populated from /Notify/SpillButton.
+	 *  key = `${bank}.${idx}`. Spill expands a group/DCA to show its members on
+	 *  the surface faders (different feature from flip-to-sends). */
+	public spillStates = new Map<string, boolean>()
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -336,7 +341,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					state = intArg(m, 2)
 				if (g == null || ch == null || state == null) return
 				this.ensureChannel(g, ch).solo = state !== 0
-				this.checkFeedbacks('channelSolo')
+				this.checkFeedbacks('channelSolo', 'anySolo')
 				pushTrackVariable(this, g, ch, 'solo')
 				break
 			}
@@ -350,6 +355,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const assigned = intArg(m, 3)
 				if (k == null || name == null || func == null || assigned == null) return
 				if (k < 0 || k > 31) return
+				const prev = this.userKeys.get(k)
+				const changed = !prev || prev.func !== func || prev.assigned !== (assigned !== 0)
 				this.userKeys.set(k, { name, func, assigned: assigned !== 0 })
 				const k1 = k + 1
 				this.setVariableValues({
@@ -357,6 +364,23 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					[`userkey_${k1}_function`]: func,
 					[`userkey_${k1}_assigned`]: assigned !== 0 ? 'on' : 'off',
 				})
+				// If a "Flip Sends" key was added/removed/changed, regenerate actions
+				// (so the dropdown updates) and presets (so the per-key button appears).
+				if (changed && func.startsWith('Flip Sends')) {
+					this.updateActions()
+					this.updatePresets()
+				}
+				break
+			}
+			case '/Notify/SpillButton': {
+				// ,iii [bank, idx, state]. Spill expands a group/DCA to show its
+				// members on the surface faders (different feature from flip-to-sends).
+				const bank = intArg(m, 0)
+				const idx = intArg(m, 1)
+				const state = intArg(m, 2)
+				if (bank == null || idx == null || state == null) return
+				this.spillStates.set(`${bank}.${idx}`, state !== 0)
+				this.checkFeedbacks('spillActive')
 				break
 			}
 			case '/Notify/InternalAssign': {
@@ -774,7 +798,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			pushTrackVariable(this, group, ch, 'mute')
 		}
 		if (delta.solo != null) {
-			this.checkFeedbacks('channelSolo')
+			this.checkFeedbacks('channelSolo', 'anySolo')
 			pushTrackVariable(this, group, ch, 'solo')
 		}
 		if (delta.gain != null)  pushTrackVariable(this, group, ch, 'gain')
@@ -811,6 +835,19 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			flip_name:   name,
 			flip_aux:    aux1based,
 		})
+	}
+
+	/** Optimistic local clear of every channel's solo flag, paired with the
+	 *  /ClearAllSolo command. Refreshes feedbacks + variables. */
+	applyClearAllSolo(): void {
+		for (const [key, s] of this.channels) {
+			if (s.solo) {
+				s.solo = false
+				const [g, ch] = key.split('.').map(Number)
+				pushTrackVariable(this, g, ch, 'solo')
+			}
+		}
+		this.checkFeedbacks('channelSolo', 'anySolo')
 	}
 
 	applyMuteGroup(grp: number, state: boolean): void {

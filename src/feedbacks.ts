@@ -47,6 +47,30 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			},
 		},
 
+		anySolo: {
+			type: 'boolean',
+			name: 'Any track is soloed',
+			description: 'True when at least one track (input/aux/group/etc) is in solo. Ideal for a "Clear All Solo" button indicator.',
+			defaultStyle: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
+			options: [],
+			callback: () => {
+				for (const s of self.channels.values()) if (s.solo) return true
+				return false
+			},
+		},
+
+		spillActive: {
+			type: 'boolean',
+			name: 'Spill mode active',
+			description: 'True when the matching Spill button on the LV1 surface is engaged (group/DCA expanded on faders).',
+			defaultStyle: { bgcolor: combineRgb(160, 120, 200), color: combineRgb(0, 0, 0) },
+			options: [
+				{ id: 'bank', type: 'number', label: 'Bank (0 = Mixer 1, 1 = Mixer 2)', default: 0, min: 0, max: 1 },
+				{ id: 'idx', type: 'number', label: 'Slot (0-based)', default: 0, min: 0, max: 31 },
+			],
+			callback: (fb) => self.spillStates.get(`${Number(fb.options.bank)}.${Number(fb.options.idx)}`) ?? false,
+		},
+
 		sendOn: {
 			type: 'boolean',
 			name: 'Send ON to aux',

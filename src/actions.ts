@@ -260,6 +260,84 @@ export function UpdateActions(self: LV1Instance): void {
 			},
 		},
 
+		flipSendsViaUserKey: {
+			name: 'Flip Sends: Trigger (via User Key)',
+			description:
+				'Presses a User Key configured on the LV1 with the "Flip Sends" function. ' +
+				'You must first assign a User Key on the LV1 to "Flip Sends: MX1: Mon X" (or similar). ' +
+				'This is the ONLY way to physically engage flip-to-sends on the LV1 surface via OSC.',
+			options: [
+				{
+					id: 'userKey',
+					type: 'dropdown',
+					label: 'Flip Sends user key',
+					default: -1,
+					choices: (() => {
+						const c: { id: number; label: string }[] = []
+						for (const [idx, uk] of self.userKeys) {
+							if (uk.assigned && uk.func.startsWith('Flip Sends')) {
+								c.push({ id: idx, label: `UK ${idx + 1}: ${uk.func}` })
+							}
+						}
+						if (c.length === 0) {
+							c.push({ id: -1, label: '(no User Key with "Flip Sends" function found — configure on the LV1 first)' })
+						}
+						return c
+					})(),
+				},
+			],
+			callback: async (a) => {
+				const k = Number(a.options.userKey)
+				if (!Number.isFinite(k) || k < 0) {
+					self.log('warn', 'flipSendsViaUserKey: no valid User Key selected')
+					return
+				}
+				// Momentary press: T then F in the same ms (matches iPad MyFOH pattern)
+				self.send('/Set/UserKey', [intCh(k), { type: 'T' }])
+				self.send('/Set/UserKey', [intCh(k), { type: 'F' }])
+			},
+		},
+
+		spillButton: {
+			name: 'Spill: Press a Spill button (expand group/DCA on faders)',
+			description:
+				'Engages SPILL mode on the LV1 surface — expands a group or DCA so its members show on the channel faders. ' +
+				'NOT the same as flip-to-sends. The bank/idx map to the LV1\'s Spill buttons on the master strip area.',
+			options: [
+				{ id: 'bank', type: 'number', label: 'Bank (0 = Mixer 1, 1 = Mixer 2)', default: 0, min: 0, max: 1 },
+				{ id: 'idx', type: 'number', label: 'Slot (0-based)', default: 0, min: 0, max: 31 },
+				{
+					id: 'state', type: 'dropdown', label: 'State', default: 'toggle',
+					choices: [
+						{ id: 'on', label: 'Spill on' },
+						{ id: 'off', label: 'Spill off' },
+						{ id: 'toggle', label: 'Toggle' },
+					],
+				},
+			],
+			callback: async (a) => {
+				const bank = Number(a.options.bank)
+				const idx = Number(a.options.idx)
+				const cur = self.spillStates.get(`${bank}.${idx}`) ?? false
+				const mode = String(a.options.state)
+				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
+				self.send('/Set/SpillButton', [intCh(bank), intCh(idx), intCh(desired ? 1 : 0)])
+				// Optimistic update
+				self.spillStates.set(`${bank}.${idx}`, desired)
+				self.checkFeedbacks('spillActive')
+			},
+		},
+
+		clearAllSolo: {
+			name: 'Solo: Clear All',
+			description: 'Sends /ClearAllSolo — clears solo on every channel, aux and group. Equivalent to the CLR SOLO button on the LV1 surface.',
+			options: [],
+			callback: async () => {
+				self.send('/ClearAllSolo', [])
+				self.applyClearAllSolo()
+			},
+		},
+
 		auxSelect: {
 			name: 'Aux: Focus (MyMon view)',
 			options: [

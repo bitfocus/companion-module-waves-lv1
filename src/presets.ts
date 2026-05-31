@@ -97,5 +97,73 @@ export function UpdatePresets(self: LV1Instance): void {
 		feedbacks: [],
 	}
 
+	// CLR SOLO — clears solo everywhere. Lights up (yellow) whenever any track is soloed.
+	presets['clear_all_solo'] = {
+		category: 'Solo',
+		type: 'button',
+		name: 'Clear All Solo',
+		style: {
+			text: 'CLR\nSOLO',
+			size: 'auto',
+			color: combineRgb(255, 255, 255),
+			bgcolor: combineRgb(30, 30, 30),
+		},
+		steps: [{ down: [{ actionId: 'clearAllSolo', options: {} }], up: [] }],
+		feedbacks: [{ feedbackId: 'anySolo', options: {} }],
+	}
+
+	// Flip Sends presets — one per User Key configured on the LV1 with the
+	// "Flip Sends" function. Each press triggers that user key (momentary),
+	// and the button lights up while the LV1 is flipped to that specific aux.
+	for (const [idx, uk] of self.userKeys) {
+		if (!uk.assigned || !uk.func.startsWith('Flip Sends')) continue
+		// uk.func looks like "Flip Sends: MX1: Mon 1". uk.name is the short label ("Mon 1").
+		// Find the matching aux index by name so the feedback knows which aux to watch.
+		const auxIdx = self.detected.auxNames?.findIndex((n) => n === uk.name) ?? -1
+		presets[`flip_sends_${idx + 1}`] = {
+			category: 'Flip Sends',
+			type: 'button',
+			name: `Flip Sends — ${uk.name} (UK ${idx + 1})`,
+			style: {
+				text: `FLIP\n${uk.name}`,
+				size: 'auto',
+				color: combineRgb(255, 255, 255),
+				bgcolor: combineRgb(60, 30, 90),
+			},
+			steps: [
+				{
+					down: [{ actionId: 'flipSendsViaUserKey', options: { userKey: idx } }],
+					up: [],
+				},
+			],
+			feedbacks: auxIdx >= 0
+				? [{ feedbackId: 'flipForTarget', options: { aux: auxIdx + 1 } }]
+				: [],
+		}
+	}
+
+	// Spill button presets — one per Mixer (bank 0 and 1), default to slot 0.
+	// Users will likely edit the slot index to match the group/DCA they want to spill.
+	for (let bank = 0; bank < 2; bank++) {
+		presets[`spill_mixer_${bank + 1}`] = {
+			category: 'Spill',
+			type: 'button',
+			name: `Spill Mixer ${bank + 1} — slot 0`,
+			style: {
+				text: `SPILL\nMX${bank + 1}`,
+				size: 'auto',
+				color: combineRgb(255, 255, 255),
+				bgcolor: combineRgb(40, 30, 50),
+			},
+			steps: [
+				{
+					down: [{ actionId: 'spillButton', options: { bank, idx: 0, state: 'toggle' } }],
+					up: [],
+				},
+			],
+			feedbacks: [{ feedbackId: 'spillActive', options: { bank, idx: 0 } }],
+		}
+	}
+
 	self.setPresetDefinitions(presets)
 }
