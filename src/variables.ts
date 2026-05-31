@@ -35,6 +35,11 @@ export function UpdateVariables(self: LV1Instance): void {
 	defs.push({ variableId: 'scene_count',    name: 'Total scenes' })
 	defs.push({ variableId: 'channels_total', name: 'Total input channels (detected)' })
 	defs.push({ variableId: 'auxes_total',    name: 'Total aux buses (detected)' })
+	defs.push({ variableId: 'flip_active',    name: 'Flip-to-faders active (on/off)' })
+	defs.push({ variableId: 'flip_aux',       name: 'Flipped aux 1-based (0 = none)' })
+	defs.push({ variableId: 'flip_group',     name: 'Flipped target group (3=LR if none)' })
+	defs.push({ variableId: 'flip_ch',        name: 'Flipped target channel (0-based)' })
+	defs.push({ variableId: 'flip_name',      name: 'Flipped target name ("Mon 1", "LR", …)' })
 	for (let i = 1; i <= 8; i++) {
 		defs.push({ variableId: `mg_${i}`, name: `Mute group ${i} (on/off)` })
 	}
@@ -73,6 +78,17 @@ export function pushAll(self: LV1Instance): void {
 	values['scene_count']    = self.scenes.size
 	values['channels_total'] = self.effectiveChannels()
 	values['auxes_total']    = self.effectiveAuxes()
+	// Flip state — same logic as pushFlipVariables() in main.ts (kept in sync).
+	const t = self.currentFlipTarget
+	values['flip_active'] = t ? 'on' : 'off'
+	values['flip_group']  = t ? t.group : 3
+	values['flip_ch']     = t ? t.ch : 0
+	values['flip_aux']    = t && t.group === 2 ? t.ch + 1 : 0
+	values['flip_name']   = t
+		? (t.group === 2
+			? (self.detected.auxNames?.[t.ch] ?? `Aux ${t.ch + 1}`)
+			: (self.channels.get(`${t.group}.${t.ch}`)?.name ?? `g${t.group}.${t.ch}`))
+		: 'LR'
 	for (let i = 1; i <= 8; i++) {
 		values[`mg_${i}`] = self.muteGroups.get(i - 1) ? 'on' : 'off'
 	}

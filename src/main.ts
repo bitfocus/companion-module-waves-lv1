@@ -54,6 +54,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	/** Scene catalogue from /Notify/SceneList. key = scene index (0-based). */
 	public scenes = new Map<number, string>()
 
+	/** Currently flipped-to-faders target. Derived from /Notify/InternalAssign with type=7
+	 *  (= master fader strip assignment). null means default (LR) — no flip active. */
+	public currentFlipTarget: { group: number; ch: number } | null = null
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -325,6 +329,37 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.ensureChannel(g, ch).solo = state !== 0
 				this.checkFeedbacks('channelSolo')
 				pushTrackVariable(this, g, ch, 'solo')
+				break
+			}
+			case '/Notify/InternalAssign': {
+				// VERIFIED LIVE (FlipOnLV1.pcapng + live test 2026-05-31):
+				//   ,iiiiii [group, ch, type, sub, state, validFlag]
+				// When type == 7, this is the "master fader strip assignment" — i.e. which bus
+				// the surface master strip is currently controlling. That's the FLIP-TO-FADERS
+				// indicator: when state=1 on an aux (group=2) it means the surface is flipped
+				// to show that aux's sends. When state=1 on LR (group=3 ch=0) it means default
+				// (no flip). The LV1 sends the un-assignment (old, state=0) AND the new
+				// assignment (new, state=1) in pairs, so we keep our model as "the LAST entry
+				// with state=1 for type=7" = current flip target.
+				const g = intArg(m, 0)
+				const ch = intArg(m, 1)
+				const type = intArg(m, 2)
+				const state = intArg(m, 4)
+				if (g == null || ch == null || type == null || state == null) return
+				if (type !== 7) break  // not the master strip assignment
+				const isLR = g === 3 && ch === 0
+				if (state === 1) {
+					// New assignment. LR=default (no flip); anything else = flip active.
+					this.currentFlipTarget = isLR ? null : { group: g, ch }
+					this.log('info', `Flip target → ${isLR ? 'LR (default)' : `g${g}.${ch}`}`)
+					this.checkFeedbacks('flipActive', 'flipForTarget')
+					this.pushFlipVariables()
+				} else if (state === 0 && this.currentFlipTarget?.group === g && this.currentFlipTarget?.ch === ch) {
+					// Explicit un-assignment of the CURRENT target with no following state=1 (rare).
+					this.currentFlipTarget = null
+					this.checkFeedbacks('flipActive', 'flipForTarget')
+					this.pushFlipVariables()
+				}
 				break
 			}
 			case '/Notify/MuteGroup': {
@@ -714,6 +749,28 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		Object.assign(s, delta)
 		this.sends.set(key, s)
 		if (delta.on != null) this.checkFeedbacks('sendOn')
+	}
+
+	pushFlipVariables(): void {
+		const t = this.currentFlipTarget
+		const active = t != null
+		let name = 'LR'
+		let aux1based = 0
+		if (t) {
+			if (t.group === 2) {
+				name = this.detected.auxNames?.[t.ch] ?? `Aux ${t.ch + 1}`
+				aux1based = t.ch + 1
+			} else {
+				name = this.channels.get(`${t.group}.${t.ch}`)?.name ?? `g${t.group}.${t.ch}`
+			}
+		}
+		this.setVariableValues({
+			flip_active: active ? 'on' : 'off',
+			flip_group:  t ? t.group : 3,
+			flip_ch:     t ? t.ch : 0,
+			flip_name:   name,
+			flip_aux:    aux1based,
+		})
 	}
 
 	applyMuteGroup(grp: number, state: boolean): void {

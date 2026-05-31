@@ -106,6 +106,30 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			},
 		},
 
+		flipActive: {
+			type: 'boolean',
+			name: 'Flip-to-faders active (any aux)',
+			description: 'True whenever the LV1 surface is flipped to show sends for any aux (i.e. master strip controls an aux instead of LR).',
+			defaultStyle: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
+			options: [],
+			callback: () => self.currentFlipTarget != null,
+		},
+
+		flipForTarget: {
+			type: 'boolean',
+			name: 'Flip-to-faders active (specific aux)',
+			description: 'True when the LV1 surface is flipped to this specific aux.',
+			defaultStyle: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
+			options: [
+				{ id: 'aux', type: 'dropdown', label: 'Aux', default: 1, choices: channelsFor(self, 2) },
+			],
+			callback: (fb) => {
+				const t = self.currentFlipTarget
+				if (!t || t.group !== 2) return false
+				return t.ch === Number(fb.options.aux) - 1
+			},
+		},
+
 		currentScene: {
 			type: 'boolean',
 			name: 'Current scene index matches',
