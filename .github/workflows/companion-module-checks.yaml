@@ -1,0 +1,15 @@
+name: Companion Module Checks
+
+on:
+  push:
+
+jobs:
+  check:
+    name: Check module
+
+    permissions:
+      packages: read
+
+    uses: bitfocus/actions/.github/workflows/module-checks.yaml@main
+    # with:
+    #   upload-artifact: true # uncomment this to upload the built package as an artifact to this workflow that you can download and share with others
