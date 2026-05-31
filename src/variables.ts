@@ -45,6 +45,12 @@ export function UpdateVariables(self: LV1Instance): void {
 	for (let i = 1; i <= 8; i++) {
 		defs.push({ variableId: `mg_${i}`, name: `Mute group ${i} (on/off)` })
 	}
+	// User Assignable Keys (16 slots, 1-based for the UI).
+	for (let i = 1; i <= 16; i++) {
+		defs.push({ variableId: `userkey_${i}_name`,     name: `User key ${i} — short label (e.g. "Mon 1")` })
+		defs.push({ variableId: `userkey_${i}_function`, name: `User key ${i} — full function (e.g. "Flip Sends: MX1: Mon 1")` })
+		defs.push({ variableId: `userkey_${i}_assigned`, name: `User key ${i} — assigned (on/off)` })
+	}
 	// One variable per scene with its name. Iterate up to the highest index we've seen
 	// (scenes can be sparse if user deleted some, but typically contiguous from 0).
 	for (const [idx, name] of self.scenes) {
@@ -95,6 +101,12 @@ export function pushAll(self: LV1Instance): void {
 	values['current_layer_index'] = self.currentLayer != null ? self.currentLayer + 1 : ''
 	for (let i = 1; i <= 8; i++) {
 		values[`mg_${i}`] = self.muteGroups.get(i - 1) ? 'on' : 'off'
+	}
+	for (let i = 1; i <= 16; i++) {
+		const uk = self.userKeys.get(i - 1)
+		values[`userkey_${i}_name`]     = uk?.name ?? ''
+		values[`userkey_${i}_function`] = uk?.func ?? ''
+		values[`userkey_${i}_assigned`] = uk?.assigned ? 'on' : 'off'
 	}
 	for (const [idx, name] of self.scenes) {
 		values[`scene_${idx + 1}_name`] = name

@@ -62,6 +62,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  (= master fader strip assignment). null means default (LR) — no flip active. */
 	public currentFlipTarget: { group: number; ch: number } | null = null
 
+	/** User Assignable Keys (16 slots). Populated from /Notify/UserKeyInfo on connect.
+	 *  key = 0..15. value = { name, func, assigned }.
+	 *  Example: { name: "Mon 1", func: "Flip Sends: MX1: Mon 1", assigned: true }. */
+	public userKeys = new Map<number, { name: string; func: string; assigned: boolean }>()
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -333,6 +338,25 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.ensureChannel(g, ch).solo = state !== 0
 				this.checkFeedbacks('channelSolo')
 				pushTrackVariable(this, g, ch, 'solo')
+				break
+			}
+			case '/Notify/UserKeyInfo': {
+				// ,issi [keyIdx, shortName, function, assigned(0|1)]
+				// Verified live: /Notify/UserKeyInfo i:0 "Mon 1" "Flip Sends: MX1: Mon 1" i:1
+				// Sent for each of the 16 user keys during the initial state flood.
+				const k = intArg(m, 0)
+				const name = m.args[1]?.type === 's' ? (m.args[1].value as string) : null
+				const func = m.args[2]?.type === 's' ? (m.args[2].value as string) : null
+				const assigned = intArg(m, 3)
+				if (k == null || name == null || func == null || assigned == null) return
+				if (k < 0 || k > 31) return
+				this.userKeys.set(k, { name, func, assigned: assigned !== 0 })
+				const k1 = k + 1
+				this.setVariableValues({
+					[`userkey_${k1}_name`]:     name,
+					[`userkey_${k1}_function`]: func,
+					[`userkey_${k1}_assigned`]: assigned !== 0 ? 'on' : 'off',
+				})
 				break
 			}
 			case '/Notify/InternalAssign': {

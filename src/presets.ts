@@ -69,14 +69,16 @@ export function UpdatePresets(self: LV1Instance): void {
 		}
 	}
 
-	// User Keys 1-16 (momentary).
+	// User Keys 1-16 (momentary). Label shows the LV1's own short name from
+	// /Notify/UserKeyInfo (e.g. "Mon 1") with a fallback to "UK N" if the key
+	// is unassigned or names haven't arrived yet.
 	for (let k = 1; k <= 16; k++) {
 		presets[`userkey_${k}`] = {
 			category: 'User Keys',
 			type: 'button',
 			name: `User Key ${k}`,
 			style: {
-				text: `UK ${k}`,
+				text: `UK ${k}\n$(lv1:userkey_${k}_name)`,
 				size: 'auto',
 				color: combineRgb(255, 255, 255),
 				bgcolor: combineRgb(30, 60, 90),
