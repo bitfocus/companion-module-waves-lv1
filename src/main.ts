@@ -49,6 +49,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	public meters = new Map<string, number>()
 	public lastTempoBpm: number | null = null
 	public currentLayer: number | null = null
+	/** Which mixer view is active in eMotion/MyFOH: 1 or 2.
+	 *  Derived from /Notify/CurrentLayer args[0] + 1. The LV1 supports two
+	 *  simultaneous mixer engines (typical: FOH + MON). */
+	public currentMixer: number | null = null
 	public currentScene: number | null = null
 	public currentSceneName: string | null = null
 	/** Scene catalogue from /Notify/SceneList. key = scene index (0-based). */
@@ -466,11 +470,23 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				break
 			}
 			case '/Notify/CurrentLayer': {
+				// ,ii [mixerPage, layerIndex]
+				//   mixerPage = 0 → Mixer 1 view, 1 → Mixer 2 view
+				//   layerIndex = 0..7 → which surface layer in that mixer
+				// See lv1_flip_and_mixer.md for full notes.
+				const mixerPage = intArg(m, 0)
 				const layer = intArg(m, 1)
+				if (mixerPage != null) {
+					this.currentMixer = mixerPage + 1   // 1-based for display
+				}
 				if (layer != null) {
 					this.currentLayer = layer
 					this.checkFeedbacks('currentLayer')
 				}
+				this.setVariableValues({
+					current_mixer:       this.currentMixer ?? '',
+					current_layer_index: this.currentLayer != null ? this.currentLayer + 1 : '',
+				})
 				break
 			}
 			case '/Notify/CurSceneIndex': {

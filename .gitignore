@@ -4,3 +4,6 @@ dist/
 .DS_Store
 .env
 *.tgz
+
+# Local commit-message scratch file (PowerShell here-string workaround)
+.git-commit-msg.tmp

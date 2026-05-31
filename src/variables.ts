@@ -40,6 +40,8 @@ export function UpdateVariables(self: LV1Instance): void {
 	defs.push({ variableId: 'flip_group',     name: 'Flipped target group (3=LR if none)' })
 	defs.push({ variableId: 'flip_ch',        name: 'Flipped target channel (0-based)' })
 	defs.push({ variableId: 'flip_name',      name: 'Flipped target name ("Mon 1", "LR", …)' })
+	defs.push({ variableId: 'current_mixer',       name: 'Active mixer view (1 = Mixer 1, 2 = Mixer 2)' })
+	defs.push({ variableId: 'current_layer_index', name: 'Active surface layer index (1-8) within the current mixer' })
 	for (let i = 1; i <= 8; i++) {
 		defs.push({ variableId: `mg_${i}`, name: `Mute group ${i} (on/off)` })
 	}
@@ -89,6 +91,8 @@ export function pushAll(self: LV1Instance): void {
 			? (self.detected.auxNames?.[t.ch] ?? `Aux ${t.ch + 1}`)
 			: (self.channels.get(`${t.group}.${t.ch}`)?.name ?? `g${t.group}.${t.ch}`))
 		: 'LR'
+	values['current_mixer']       = self.currentMixer ?? ''
+	values['current_layer_index'] = self.currentLayer != null ? self.currentLayer + 1 : ''
 	for (let i = 1; i <= 8; i++) {
 		values[`mg_${i}`] = self.muteGroups.get(i - 1) ? 'on' : 'off'
 	}
