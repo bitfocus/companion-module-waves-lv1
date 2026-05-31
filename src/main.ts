@@ -447,6 +447,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				s.gain = db
 				this.sends.set(key, s)
 				this.checkFeedbacks('sendGain')
+				// TalkBack lives on group=8, ch=0 — its send-gain changes drive the TB feedbacks.
+				if (g === 8 && ch === 0) this.checkFeedbacks('talkBackToAux', 'talkBackAny')
 				break
 			}
 			case '/Notify/TrackColor': {
@@ -813,6 +815,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		Object.assign(s, delta)
 		this.sends.set(key, s)
 		if (delta.on != null) this.checkFeedbacks('sendOn')
+		// TalkBack uses group=8, ch=0 sends. Refresh TB feedbacks whenever those change.
+		if (group === 8 && ch === 0) this.checkFeedbacks('talkBackToAux', 'talkBackAny')
 	}
 
 	pushFlipVariables(): void {

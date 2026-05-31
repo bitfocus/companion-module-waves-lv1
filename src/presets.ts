@@ -142,6 +142,27 @@ export function UpdatePresets(self: LV1Instance): void {
 		}
 	}
 
+	// Talk Back — hold-to-talk button that engages all configured TB destinations.
+	// Uses Companion's `down` (press) + `up` (release) for proper momentary behaviour.
+	presets['talk_back_all'] = {
+		category: 'Talk Back',
+		type: 'button',
+		name: 'TALK (hold to talk, all configured destinations)',
+		style: {
+			text: 'TALK',
+			size: '24',
+			color: combineRgb(255, 255, 255),
+			bgcolor: combineRgb(60, 30, 30),
+		},
+		steps: [
+			{
+				down: [{ actionId: 'talkBackAll', options: { db: 0, state: 'press' } }],
+				up:   [{ actionId: 'talkBackAll', options: { db: 0, state: 'release' } }],
+			},
+		],
+		feedbacks: [{ feedbackId: 'talkBackAny', options: {} }],
+	}
+
 	// Spill button presets — one per Mixer (bank 0 and 1), default to slot 0.
 	// Users will likely edit the slot index to match the group/DCA they want to spill.
 	for (let bank = 0; bank < 2; bank++) {

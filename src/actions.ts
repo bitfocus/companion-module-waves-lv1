@@ -328,6 +328,87 @@ export function UpdateActions(self: LV1Instance): void {
 			},
 		},
 
+		talkBack: {
+			name: 'Talk Back: Send to aux (press / release / toggle)',
+			description:
+				'TalkBack audio routing — sets the TalkBack channel (group=8, ch=0) send gain into the chosen aux. ' +
+				'Press = jump to active dB (default 0), Release = jump to -144 dB. ' +
+				'Verified live: this is exactly the mechanism the LV1 TALK BACK panel uses.',
+			options: [
+				{ id: 'aux', type: 'dropdown', label: 'Destination aux', default: 1, choices: channelsFor(self, 2) },
+				{ id: 'db', type: 'number', label: 'Active level (dB)', default: 0, min: -60, max: 10, step: 0.5 },
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'Action',
+					default: 'press',
+					choices: [
+						{ id: 'press', label: 'Press (engage TB)' },
+						{ id: 'release', label: 'Release (cut TB)' },
+						{ id: 'toggle', label: 'Toggle' },
+					],
+				},
+			],
+			callback: async (a) => {
+				const aux = Number(a.options.aux) - 1
+				const level = Number(a.options.db)
+				const mode = String(a.options.state)
+				const curGain = self.sends.get(`8.0.${aux}`)?.gain ?? -144
+				const wasActive = curGain > -100
+				const engage = mode === 'press' ? true : mode === 'release' ? false : !wasActive
+				const targetDb = engage ? level : -144
+				self.applySendDelta(8, 0, aux, { gain: targetDb })
+				self.send('/Set/Aux/Send/Gain', [intCh(8), intCh(0), intCh(aux), { type: 'd', value: targetDb }])
+			},
+		},
+
+		talkBackAll: {
+			name: 'Talk Back: Press/Release ALL configured destinations',
+			description:
+				'Engages or releases TalkBack on EVERY aux that has the TB send enabled (Send On = TRUE for group=8). ' +
+				'Mirrors the physical TALK button. Pre-configure which auxes receive TB in the LV1\'s TALK BACK panel; ' +
+				'this action just drives the gain of those sends together.',
+			options: [
+				{ id: 'db', type: 'number', label: 'Active level (dB)', default: 0, min: -60, max: 10, step: 0.5 },
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'Action',
+					default: 'press',
+					choices: [
+						{ id: 'press', label: 'Press (engage TB everywhere)' },
+						{ id: 'release', label: 'Release (cut TB everywhere)' },
+						{ id: 'toggle', label: 'Toggle' },
+					],
+				},
+			],
+			callback: async (a) => {
+				const level = Number(a.options.db)
+				const mode = String(a.options.state)
+				// Find every aux that has the TB send enabled (Send On = TRUE for group=8 ch=0)
+				const enabledAuxes: number[] = []
+				for (const [key, s] of self.sends) {
+					if (!key.startsWith('8.0.')) continue
+					if (!s.on) continue
+					enabledAuxes.push(Number(key.split('.')[2]))
+				}
+				if (enabledAuxes.length === 0) {
+					self.log('warn', 'talkBackAll: no auxes have TB send enabled. Configure destinations in the LV1 TALK BACK panel first.')
+					return
+				}
+				// Determine if currently "engaged" by sampling first enabled aux
+				const sample = self.sends.get(`8.0.${enabledAuxes[0]}`)?.gain ?? -144
+				const wasActive = sample > -100
+				const engage = mode === 'press' ? true : mode === 'release' ? false : !wasActive
+				const targetDb = engage ? level : -144
+				for (const aux of enabledAuxes) {
+					self.applySendDelta(8, 0, aux, { gain: targetDb })
+					self.send('/Set/Aux/Send/Gain', [intCh(8), intCh(0), intCh(aux), { type: 'd', value: targetDb }])
+				}
+				self.log('debug', `talkBack ${engage ? 'ENGAGE' : 'RELEASE'} → ${enabledAuxes.length} aux(es) @ ${targetDb} dB`)
+			},
+		},
+
 		clearAllSolo: {
 			name: 'Solo: Clear All',
 			description: 'Sends /ClearAllSolo — clears solo on every channel, aux and group. Equivalent to the CLR SOLO button on the LV1 surface.',
