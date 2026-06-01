@@ -1,0 +1,29 @@
+{
+	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+	"type": "connection",
+	"id": "waves-lv1",
+	"name": "waves-lv1",
+	"shortname": "LV1",
+	"description": "Control Waves LV1 digital mixer over its native OSC-over-TCP protocol. Auto-discovery via Waves zDNS multicast, full /Set/ vocabulary, live feedbacks, channel-name dropdowns, fade ramping, scene recall by name.",
+	"version": "1.0.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/miglourenco/companion-module-waves-lv1.git",
+	"bugs": "https://github.com/miglourenco/companion-module-waves-lv1/issues",
+	"maintainers": [
+		{
+			"name": "Miguel Lourenço",
+			"email": "miguel123369@gmail.com",
+			"github": "miglourenco"
+		}
+	],
+	"runtime": {
+		"type": "node22",
+		"api": "nodejs-ipc",
+		"apiVersion": "1.12.0",
+		"entrypoint": "../dist/main.js"
+	},
+	"legacyIds": [],
+	"manufacturer": "Waves Audio",
+	"products": ["LV1"],
+	"keywords": ["mixer", "audio", "lv1", "waves", "osc", "myfoh", "mymon", "soundgrid"]
+}
