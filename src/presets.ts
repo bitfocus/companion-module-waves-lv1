@@ -26,7 +26,11 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{ feedbackId: 'channelMute', options: { group: 0, ch_in: ch } }],
+			feedbacks: [{
+				feedbackId: 'channelMute',
+				options: { group: 0, ch_in: ch },
+				style: { bgcolor: combineRgb(180, 30, 30), color: combineRgb(255, 255, 255) },
+			}],
 		}
 	}
 
@@ -48,7 +52,11 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{ feedbackId: 'channelSolo', options: { group: 0, ch_in: ch } }],
+			feedbacks: [{
+				feedbackId: 'channelSolo',
+				options: { group: 0, ch_in: ch },
+				style: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
+			}],
 		}
 	}
 
@@ -65,7 +73,11 @@ export function UpdatePresets(self: LV1Instance): void {
 				bgcolor: combineRgb(30, 30, 30),
 			},
 			steps: [{ down: [{ actionId: 'muteGroup', options: { group: g, state: 'toggle' } }], up: [] }],
-			feedbacks: [{ feedbackId: 'muteGroup', options: { group: g } }],
+			feedbacks: [{
+				feedbackId: 'muteGroup',
+				options: { group: g },
+				style: { bgcolor: combineRgb(200, 60, 60), color: combineRgb(255, 255, 255) },
+			}],
 		}
 	}
 
@@ -109,7 +121,11 @@ export function UpdatePresets(self: LV1Instance): void {
 			bgcolor: combineRgb(30, 30, 30),
 		},
 		steps: [{ down: [{ actionId: 'clearAllSolo', options: {} }], up: [] }],
-		feedbacks: [{ feedbackId: 'anySolo', options: {} }],
+		feedbacks: [{
+			feedbackId: 'anySolo',
+			options: {},
+			style: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
+		}],
 	}
 
 	// Flip Sends presets — one per User Key configured on the LV1 with the
@@ -137,30 +153,43 @@ export function UpdatePresets(self: LV1Instance): void {
 				},
 			],
 			feedbacks: auxIdx >= 0
-				? [{ feedbackId: 'flipForTarget', options: { aux: auxIdx + 1 } }]
+				? [{
+					feedbackId: 'flipForTarget',
+					options: { aux: auxIdx + 1 },
+					style: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
+				}]
 				: [],
 		}
 	}
 
-	// Talk Back — hold-to-talk button that engages all configured TB destinations.
-	// Uses Companion's `down` (press) + `up` (release) for proper momentary behaviour.
-	presets['talk_back_all'] = {
-		category: 'Talk Back',
-		type: 'button',
-		name: 'TALK (hold to talk, all configured destinations)',
-		style: {
-			text: 'TALK',
-			size: '24',
-			color: combineRgb(255, 255, 255),
-			bgcolor: combineRgb(60, 30, 30),
-		},
-		steps: [
-			{
-				down: [{ actionId: 'talkBackAll', options: { db: 0, state: 'press' } }],
-				up:   [{ actionId: 'talkBackAll', options: { db: 0, state: 'release' } }],
+	// Talk Back — one button per aux output. Press toggles TB to that specific
+	// output (sets Send/On + Send/Gain together — same as `tbsend N on 0` in the
+	// debugger). Button lights up while TB is flowing to that output.
+	const auxCount = self.detected.auxes ?? self.detected.auxNames?.length ?? 16
+	for (let aux = 1; aux <= auxCount; aux++) {
+		const name = self.detected.auxNames?.[aux - 1] ?? `Aux ${aux}`
+		presets[`talk_back_aux_${aux}`] = {
+			category: 'Talk Back',
+			type: 'button',
+			name: `TALK → ${name}`,
+			style: {
+				text: `TALK\n${name}`,
+				size: 'auto',
+				color: combineRgb(255, 255, 255),
+				bgcolor: combineRgb(60, 30, 30),
 			},
-		],
-		feedbacks: [{ feedbackId: 'talkBackAny', options: {} }],
+			steps: [
+				{
+					down: [{ actionId: 'talkBackToOutput', options: { aux, state: 'toggle' } }],
+					up: [],
+				},
+			],
+			feedbacks: [{
+				feedbackId: 'talkBackToOutput',
+				options: { aux },
+				style: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
+			}],
+		}
 	}
 
 	// Spill button presets — one per Mixer (bank 0 and 1), default to slot 0.
@@ -182,7 +211,11 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{ feedbackId: 'spillActive', options: { bank, idx: 0 } }],
+			feedbacks: [{
+				feedbackId: 'spillActive',
+				options: { bank, idx: 0 },
+				style: { bgcolor: combineRgb(160, 120, 200), color: combineRgb(0, 0, 0) },
+			}],
 		}
 	}
 

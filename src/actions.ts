@@ -182,7 +182,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		fadeFader: {
 			name: 'Fade: Smoothly ramp a fader to target dB',
-			description: 'Linear ramp in dB over the chosen duration (~33 Hz update rate). Cancels any previous fade on the same target.',
+			description: 'Ramps a fader to a target dB over the given duration.',
 			options: [
 				{
 					id: 'target',
@@ -262,10 +262,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		flipSendsViaUserKey: {
 			name: 'Flip Sends: Trigger (via User Key)',
-			description:
-				'Presses a User Key configured on the LV1 with the "Flip Sends" function. ' +
-				'You must first assign a User Key on the LV1 to "Flip Sends: MX1: Mon X" (or similar). ' +
-				'This is the ONLY way to physically engage flip-to-sends on the LV1 surface via OSC.',
+			description: 'Triggers a User Key set to "Flip Sends" on the LV1.',
 			options: [
 				{
 					id: 'userKey',
@@ -300,9 +297,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		spillButton: {
 			name: 'Spill: Press a Spill button (expand group/DCA on faders)',
-			description:
-				'Engages SPILL mode on the LV1 surface — expands a group or DCA so its members show on the channel faders. ' +
-				'NOT the same as flip-to-sends. The bank/idx map to the LV1\'s Spill buttons on the master strip area.',
+			description: 'Expands a group/DCA onto the channel faders.',
 			options: [
 				{ id: 'bank', type: 'number', label: 'Bank (0 = Mixer 1, 1 = Mixer 2)', default: 0, min: 0, max: 1 },
 				{ id: 'idx', type: 'number', label: 'Slot (0-based)', default: 0, min: 0, max: 31 },
@@ -328,84 +323,37 @@ export function UpdateActions(self: LV1Instance): void {
 			},
 		},
 
-		talkBack: {
-			name: 'Talk Back: Send to aux (press / release / toggle)',
+		talkBackToOutput: {
+			name: 'Talk Back: Engage to output',
 			description:
-				'TalkBack audio routing — sets the TalkBack channel (group=8, ch=0) send gain into the chosen aux. ' +
-				'Press = jump to active dB (default 0), Release = jump to -144 dB. ' +
-				'Verified live: this is exactly the mechanism the LV1 TALK BACK panel uses.',
+				'Routes the TalkBack mic (group=8 ch=0) to the chosen aux output. ' +
+				'ON  → /Set/Aux/Send/On = TRUE + /Set/Aux/Send/Gain = 0 dB. ' +
+				'OFF → /Set/Aux/Send/On = FALSE + /Set/Aux/Send/Gain = -144 dB. ' +
+				'Mirrors what the TALK BACK destination buttons + TALK button do together.',
 			options: [
-				{ id: 'aux', type: 'dropdown', label: 'Destination aux', default: 1, choices: channelsFor(self, 2) },
-				{ id: 'db', type: 'number', label: 'Active level (dB)', default: 0, min: -60, max: 10, step: 0.5 },
+				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
 				{
 					id: 'state',
 					type: 'dropdown',
 					label: 'Action',
-					default: 'press',
+					default: 'toggle',
 					choices: [
-						{ id: 'press', label: 'Press (engage TB)' },
-						{ id: 'release', label: 'Release (cut TB)' },
+						{ id: 'on', label: 'On (engage TB to this output)' },
+						{ id: 'off', label: 'Off (cut TB to this output)' },
 						{ id: 'toggle', label: 'Toggle' },
 					],
 				},
 			],
 			callback: async (a) => {
 				const aux = Number(a.options.aux) - 1
-				const level = Number(a.options.db)
 				const mode = String(a.options.state)
 				const curGain = self.sends.get(`8.0.${aux}`)?.gain ?? -144
 				const wasActive = curGain > -100
-				const engage = mode === 'press' ? true : mode === 'release' ? false : !wasActive
-				const targetDb = engage ? level : -144
-				self.applySendDelta(8, 0, aux, { gain: targetDb })
+				const engage = mode === 'on' ? true : mode === 'off' ? false : !wasActive
+				const targetDb = engage ? 0 : -144
+				self.applySendDelta(8, 0, aux, { on: engage, gain: targetDb })
+				self.send('/Set/Aux/Send/On',   [intCh(8), intCh(0), intCh(aux), { type: engage ? 'T' : 'F' }])
 				self.send('/Set/Aux/Send/Gain', [intCh(8), intCh(0), intCh(aux), { type: 'd', value: targetDb }])
-			},
-		},
-
-		talkBackAll: {
-			name: 'Talk Back: Press/Release ALL configured destinations',
-			description:
-				'Engages or releases TalkBack on EVERY aux that has the TB send enabled (Send On = TRUE for group=8). ' +
-				'Mirrors the physical TALK button. Pre-configure which auxes receive TB in the LV1\'s TALK BACK panel; ' +
-				'this action just drives the gain of those sends together.',
-			options: [
-				{ id: 'db', type: 'number', label: 'Active level (dB)', default: 0, min: -60, max: 10, step: 0.5 },
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'Action',
-					default: 'press',
-					choices: [
-						{ id: 'press', label: 'Press (engage TB everywhere)' },
-						{ id: 'release', label: 'Release (cut TB everywhere)' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const level = Number(a.options.db)
-				const mode = String(a.options.state)
-				// Find every aux that has the TB send enabled (Send On = TRUE for group=8 ch=0)
-				const enabledAuxes: number[] = []
-				for (const [key, s] of self.sends) {
-					if (!key.startsWith('8.0.')) continue
-					if (!s.on) continue
-					enabledAuxes.push(Number(key.split('.')[2]))
-				}
-				if (enabledAuxes.length === 0) {
-					self.log('warn', 'talkBackAll: no auxes have TB send enabled. Configure destinations in the LV1 TALK BACK panel first.')
-					return
-				}
-				// Determine if currently "engaged" by sampling first enabled aux
-				const sample = self.sends.get(`8.0.${enabledAuxes[0]}`)?.gain ?? -144
-				const wasActive = sample > -100
-				const engage = mode === 'press' ? true : mode === 'release' ? false : !wasActive
-				const targetDb = engage ? level : -144
-				for (const aux of enabledAuxes) {
-					self.applySendDelta(8, 0, aux, { gain: targetDb })
-					self.send('/Set/Aux/Send/Gain', [intCh(8), intCh(0), intCh(aux), { type: 'd', value: targetDb }])
-				}
-				self.log('debug', `talkBack ${engage ? 'ENGAGE' : 'RELEASE'} → ${enabledAuxes.length} aux(es) @ ${targetDb} dB`)
 			},
 		},
 

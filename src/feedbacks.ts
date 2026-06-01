@@ -59,32 +59,18 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			},
 		},
 
-		talkBackToAux: {
+		talkBackToOutput: {
 			type: 'boolean',
-			name: 'Talk Back active to specific aux',
-			description: 'True when the TalkBack send to this aux is audible (gain > -100 dB).',
+			name: 'Talk Back engaged to output',
+			description: 'True when the TalkBack send to this output is audible (group=8 ch=0 send gain > -100 dB).',
 			defaultStyle: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
 			options: [
-				{ id: 'aux', type: 'dropdown', label: 'Aux', default: 1, choices: channelsFor(self, 2) },
+				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
 			],
 			callback: (fb) => {
 				const aux = Number(fb.options.aux) - 1
 				const g = self.sends.get(`8.0.${aux}`)?.gain ?? -144
 				return g > -100
-			},
-		},
-
-		talkBackAny: {
-			type: 'boolean',
-			name: 'Talk Back engaged (any destination)',
-			description: 'True when TalkBack is audible on at least one aux (any group=8 send gain > -100 dB).',
-			defaultStyle: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
-			options: [],
-			callback: () => {
-				for (const [key, s] of self.sends) {
-					if (key.startsWith('8.0.') && s.gain > -100) return true
-				}
-				return false
 			},
 		},
 
