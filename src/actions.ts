@@ -343,11 +343,12 @@ export function UpdateActions(self: LV1Instance): void {
 			callback: async (a) => {
 				const aux = Number(a.options.aux) - 1
 				const mode = String(a.options.state)
-				const curGain = self.sends.get(`8.0.${aux}`)?.gain ?? -144
-				const wasActive = curGain > -100
+				const wasActive = self.tbDestEnabled.get(aux) ?? false
 				const engage = mode === 'on' ? true : mode === 'off' ? false : !wasActive
 				const targetDb = engage ? 0 : -144
 				self.applySendDelta(8, 0, aux, { on: engage, gain: targetDb })
+				self.tbDestEnabled.set(aux, engage)
+				self.checkFeedbacks('talkBackToOutput')
 				self.send('/Set/Aux/Send/On',   [intCh(8), intCh(0), intCh(aux), { type: engage ? 'T' : 'F' }])
 				self.send('/Set/Aux/Send/Gain', [intCh(8), intCh(0), intCh(aux), { type: 'd', value: targetDb }])
 			},

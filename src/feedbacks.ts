@@ -62,15 +62,14 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		talkBackToOutput: {
 			type: 'boolean',
 			name: 'Talk Back engaged to output',
-			description: 'True when TalkBack is flowing to this output.',
+			description: 'True when this output is enabled as a TalkBack destination in the LV1 panel.',
 			defaultStyle: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
 			options: [
 				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
 			],
 			callback: (fb) => {
 				const aux = Number(fb.options.aux) - 1
-				const g = self.sends.get(`8.0.${aux}`)?.gain ?? -144
-				return g > -100
+				return self.tbDestEnabled.get(aux) ?? false
 			},
 		},
 

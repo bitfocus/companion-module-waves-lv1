@@ -72,6 +72,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  the surface faders (different feature from flip-to-sends). */
 	public spillStates = new Map<string, boolean>()
 
+	/** Talk Back destination enable state per aux sub-index. Populated from
+	 *  /Notify/InternalAssign with type=2 (the LV1's authoritative signal for
+	 *  TB destination buttons in the TALK BACK panel). key = aux sub idx (0-based). */
+	public tbDestEnabled = new Map<number, boolean>()
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -384,30 +389,37 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				break
 			}
 			case '/Notify/InternalAssign': {
-				// VERIFIED LIVE (FlipOnLV1.pcapng + live test 2026-05-31):
-				//   ,iiiiii [group, ch, type, sub, state, validFlag]
-				// When type == 7, this is the "master fader strip assignment" — i.e. which bus
-				// the surface master strip is currently controlling. That's the FLIP-TO-FADERS
-				// indicator: when state=1 on an aux (group=2) it means the surface is flipped
-				// to show that aux's sends. When state=1 on LR (group=3 ch=0) it means default
-				// (no flip). The LV1 sends the un-assignment (old, state=0) AND the new
-				// assignment (new, state=1) in pairs, so we keep our model as "the LAST entry
-				// with state=1 for type=7" = current flip target.
+				// ,iiiiii [group, ch, type, sub, state, validFlag]
+				// The 3rd int (type) is a selector:
+				//   type=2 → TalkBack DESTINATION toggle. group=8 ch=0 fixed.
+				//            sub = aux destination idx (0-based). state = panel button on/off.
+				//            Verified live 2026-06-02: clicking a destination in the LV1 TB
+				//            panel broadcasts this with the new state.
+				//   type=7 → CUE source change (NOT flip itself). Only emitted when "Aux Cue
+				//            On Flip" is enabled on the LV1. Pairs of state=0 (old) + state=1
+				//            (new). state=1 on LR (g=3 ch=0) = no cue / default; on g=2 ch=N =
+				//            cue points at aux N (= flipped). Without Aux Cue On Flip enabled
+				//            the LV1 sends NOTHING for flip — surface is silent over OSC.
 				const g = intArg(m, 0)
 				const ch = intArg(m, 1)
 				const type = intArg(m, 2)
+				const sub = intArg(m, 3)
 				const state = intArg(m, 4)
-				if (g == null || ch == null || type == null || state == null) return
-				if (type !== 7) break  // not the master strip assignment
+				if (g == null || ch == null || type == null || sub == null || state == null) return
+				if (type === 2) {
+					// TalkBack destination state. Track by sub (= aux idx).
+					this.tbDestEnabled.set(sub, state === 1)
+					this.checkFeedbacks('talkBackToOutput')
+					break
+				}
+				if (type !== 7) break
 				const isLR = g === 3 && ch === 0
 				if (state === 1) {
-					// New assignment. LR=default (no flip); anything else = flip active.
 					this.currentFlipTarget = isLR ? null : { group: g, ch }
 					this.log('info', `Flip target → ${isLR ? 'LR (default)' : `g${g}.${ch}`}`)
 					this.checkFeedbacks('flipActive', 'flipForTarget')
 					this.pushFlipVariables()
 				} else if (state === 0 && this.currentFlipTarget?.group === g && this.currentFlipTarget?.ch === ch) {
-					// Explicit un-assignment of the CURRENT target with no following state=1 (rare).
 					this.currentFlipTarget = null
 					this.checkFeedbacks('flipActive', 'flipForTarget')
 					this.pushFlipVariables()
@@ -447,8 +459,6 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				s.gain = db
 				this.sends.set(key, s)
 				this.checkFeedbacks('sendGain')
-				// TalkBack lives on group=8, ch=0 — its send-gain changes drive the TB feedback.
-				if (g === 8 && ch === 0) this.checkFeedbacks('talkBackToOutput')
 				break
 			}
 			case '/Notify/TrackColor': {
@@ -815,8 +825,6 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		Object.assign(s, delta)
 		this.sends.set(key, s)
 		if (delta.on != null) this.checkFeedbacks('sendOn')
-		// TalkBack uses group=8, ch=0 sends. Refresh TB feedback whenever those change.
-		if (group === 8 && ch === 0) this.checkFeedbacks('talkBackToOutput')
 	}
 
 	pushFlipVariables(): void {
