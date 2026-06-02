@@ -25,7 +25,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		channelMute: {
 			type: 'boolean',
 			name: 'Channel muted',
-			description: 'True when the channel is muted',
+			description: 'True when the channel is muted.',
 			defaultStyle: { bgcolor: combineRgb(180, 30, 30), color: combineRgb(255, 255, 255) },
 			options: trackPicker,
 			callback: (fb) => {
@@ -50,7 +50,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		anySolo: {
 			type: 'boolean',
 			name: 'Any track is soloed',
-			description: 'True when at least one track (input/aux/group/etc) is in solo. Ideal for a "Clear All Solo" button indicator.',
+			description: 'True when any track is soloed.',
 			defaultStyle: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
 			options: [],
 			callback: () => {
@@ -62,7 +62,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		talkBackToOutput: {
 			type: 'boolean',
 			name: 'Talk Back engaged to output',
-			description: 'True when the TalkBack send to this output is audible (group=8 ch=0 send gain > -100 dB).',
+			description: 'True when TalkBack is flowing to this output.',
 			defaultStyle: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
 			options: [
 				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
@@ -77,7 +77,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		spillActive: {
 			type: 'boolean',
 			name: 'Spill mode active',
-			description: 'True when the matching Spill button on the LV1 surface is engaged (group/DCA expanded on faders).',
+			description: 'True when this Spill button is engaged.',
 			defaultStyle: { bgcolor: combineRgb(160, 120, 200), color: combineRgb(0, 0, 0) },
 			options: [
 				{ id: 'bank', type: 'number', label: 'Bank (0 = Mixer 1, 1 = Mixer 2)', default: 0, min: 0, max: 1 },
@@ -112,7 +112,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		channelColor: {
 			type: 'advanced',
 			name: 'Channel color (from LV1 GUI)',
-			description: 'Apply the channel\'s color from the LV1 surface to the button background',
+			description: 'Uses the channel color as button background.',
 			options: trackPicker,
 			callback: (fb) => {
 				const group = Number(fb.options.group)
@@ -128,7 +128,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		meterLevel: {
 			type: 'boolean',
 			name: 'Meter above threshold',
-			description: 'Updates ~1 Hz with the live meter from /Notify/Meters',
+			description: 'True when the meter is above the threshold.',
 			defaultStyle: { bgcolor: combineRgb(200, 30, 30), color: combineRgb(255, 255, 255) },
 			options: [
 				...trackPicker,
@@ -148,7 +148,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		flipActive: {
 			type: 'boolean',
 			name: 'Flip-to-faders active (any aux)',
-			description: 'True whenever the LV1 surface is flipped to show sends for any aux (i.e. master strip controls an aux instead of LR).',
+			description: 'True when flipped to any aux. Requires "Aux Cue On Flip" enabled on the LV1.',
 			defaultStyle: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
 			options: [],
 			callback: () => self.currentFlipTarget != null,
@@ -157,7 +157,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		flipForTarget: {
 			type: 'boolean',
 			name: 'Flip-to-faders active (specific aux)',
-			description: 'True when the LV1 surface is flipped to this specific aux.',
+			description: 'True when flipped to this aux. Requires "Aux Cue On Flip" enabled on the LV1.',
 			defaultStyle: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
 			options: [
 				{ id: 'aux', type: 'dropdown', label: 'Aux', default: 1, choices: channelsFor(self, 2) },
@@ -180,7 +180,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		currentSceneByName: {
 			type: 'boolean',
 			name: 'Current scene matches (pick from list)',
-			description: 'True when the active scene is the one you picked. Updates live as the LV1 sends /Notify/SceneList or /Notify/Scene/Name.',
+			description: 'True when this is the active scene.',
 			defaultStyle: { bgcolor: combineRgb(60, 130, 200), color: combineRgb(255, 255, 255) },
 			options: [
 				{

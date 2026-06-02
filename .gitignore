@@ -16,3 +16,6 @@ dist/
 
 # Local commit-message scratch file (PowerShell here-string workaround)
 .git-commit-msg.tmp
+
+# Stray nested clone (can't be removed cleanly — ignore it)
+companion-module-waves-lv1/

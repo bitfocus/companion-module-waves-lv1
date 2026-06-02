@@ -46,6 +46,20 @@ everything from the LV1 on connect (`/Aux/Tracks`, `/Notify/Layers`, and the
 - **Send: On / Off / Toggle**
 - **Aux: Focus (MyMon view)** — `/Set/AuxId`
 
+### Talk Back
+- **Talk Back: Engage to output** — sends the TalkBack mic (group 8) to a
+  chosen aux output. ON sets Send/On=TRUE + Send/Gain=0 dB; OFF reverses.
+  Only outputs that appear in the LV1's `/Aux/Tracks` list (FX + Mons) can
+  receive TB this way — Group / Matrix / Main destinations are not exposed
+  via OSC on the current Waves API.
+
+### Surface / flip
+- **Flip Sends: Trigger (via User Key)** — presses a User Key configured on
+  the LV1 with the "Flip Sends" function. Assign the User Key on the LV1 first.
+- **Spill: Press a Spill button** — expands a group / DCA onto the channel
+  faders.
+- **Solo: Clear All** — clears every solo on the desk.
+
 ### Preamp / processing
 - **Preamp: Set input gain (dB)** (-10 to +60)
 - **Channel: Digital trim (dB)** (-20 to +20)
@@ -80,6 +94,12 @@ everything from the LV1 on connect (`/Aux/Tracks`, `/Notify/Layers`, and the
   `/Notify/Meters`, ~0.8 Hz) is at or above the threshold dB you pick.
 - **Current scene index matches** — by numeric index.
 - **Current scene matches (pick from list)** — by name.
+- **Any track is soloed** — for a "Clear All Solo" button indicator.
+- **Talk Back engaged to output** — paints red while TB is flowing to that aux.
+- **Spill mode active** — for a specific Spill button.
+- **Flip-to-faders active (any aux / specific aux)** — **requires "Aux Cue On
+  Flip" enabled on the LV1**, otherwise the LV1 doesn't broadcast flip state
+  over OSC and the feedback stays off.
 
 ## Variables
 

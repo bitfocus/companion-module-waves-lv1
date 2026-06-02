@@ -325,11 +325,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		talkBackToOutput: {
 			name: 'Talk Back: Engage to output',
-			description:
-				'Routes the TalkBack mic (group=8 ch=0) to the chosen aux output. ' +
-				'ON  → /Set/Aux/Send/On = TRUE + /Set/Aux/Send/Gain = 0 dB. ' +
-				'OFF → /Set/Aux/Send/On = FALSE + /Set/Aux/Send/Gain = -144 dB. ' +
-				'Mirrors what the TALK BACK destination buttons + TALK button do together.',
+			description: 'Sends TalkBack mic to the chosen output.',
 			options: [
 				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
 				{
@@ -359,7 +355,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		clearAllSolo: {
 			name: 'Solo: Clear All',
-			description: 'Sends /ClearAllSolo — clears solo on every channel, aux and group. Equivalent to the CLR SOLO button on the LV1 surface.',
+			description: 'Clears solo on every channel.',
 			options: [],
 			callback: async () => {
 				self.send('/ClearAllSolo', [])
@@ -447,7 +443,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		sceneRecallByName: {
 			name: 'Scene: Recall (pick from list)',
-			description: 'Dropdown of all scenes the LV1 has reported via /Notify/SceneList. Reflects renames live.',
+			description: 'Pick a scene from the list.',
 			options: [
 				{
 					id: 'scene',
@@ -468,7 +464,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		sceneNext: {
 			name: 'Scene: Next',
-			description: 'Recall the scene one index higher than the current. Wraps to first if at the end.',
+			description: 'Next scene (wraps).',
 			options: [],
 			callback: async () => {
 				const cur = self.currentScene ?? -1
@@ -481,7 +477,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		scenePrev: {
 			name: 'Scene: Previous',
-			description: 'Recall the scene one index lower than the current. Wraps to last if at the start.',
+			description: 'Previous scene (wraps).',
 			options: [],
 			callback: async () => {
 				const cur = self.currentScene ?? 0
@@ -652,7 +648,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		refreshState: {
 			name: 'State: Re-request layers + aux tracks',
-			description: 'Asks the LV1 to re-broadcast layer + aux info (useful after a module restart).',
+			description: 'Re-requests layer + aux info from the LV1.',
 			options: [],
 			callback: async () => {
 				self.requestStateRefresh()
@@ -661,8 +657,7 @@ export function UpdateActions(self: LV1Instance): void {
 
 		scanForLv1: {
 			name: 'Discovery: Scan for LV1s on the LAN',
-			description:
-				'Triggers a zDNS multicast discovery. After it finishes, reopen the module config dialog to see the updated dropdown of detected LV1s.',
+			description: 'Scans the LAN for LV1s.',
 			options: [],
 			callback: async () => {
 				self.log('info', 'Scanning for LV1s on the LAN…')
