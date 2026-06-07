@@ -57,8 +57,8 @@ body:
         - Browser:
         - Companion Version:
         - Module Version:
-        - LV1 Version:
-        - Mixer mode (16/32/64/80 ch):
+        - Device Firmware/Software Version (If applicable):
+        - Device Model (If applicable):
       render: markdown
     validations:
       required: false
