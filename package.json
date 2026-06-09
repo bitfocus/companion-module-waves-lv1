@@ -1,10 +1,10 @@
 {
 	"name": "companion-module-waves-lv1",
-	"version": "1.0.1",
-	"description": "Companion module for Waves LV1 Mixer",
+	"version": "1.0.2",
 	"main": "dist/main.js",
 	"type": "module",
 	"scripts": {
+		"postinstall": "husky",
 		"format": "prettier -w .",
 		"package": "yarn build && companion-module-build",
 		"build": "rimraf dist && yarn build:main",
@@ -14,15 +14,10 @@
 		"lint": "yarn lint:raw ."
 	},
 	"license": "MIT",
-	"author": "Miguel Lourenço <miguel123369@gmail.com>",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/miglourenco/companion-module-waves-lv1.git"
+		"url": "git+https://github.com/bitfocus/companion-module-waves-lv1.git"
 	},
-	"bugs": {
-		"url": "https://github.com/miglourenco/companion-module-waves-lv1/issues"
-	},
-	"homepage": "https://github.com/miglourenco/companion-module-waves-lv1#readme",
 	"engines": {
 		"node": "^22.20",
 		"yarn": "^4"
@@ -34,11 +29,21 @@
 		"@companion-module/tools": "^2.4.2",
 		"@types/node": "^22.0.0",
 		"eslint": "^9.39.0",
+		"husky": "^9.1.7",
+		"lint-staged": "^15.5.2",
 		"prettier": "^3.6.2",
 		"rimraf": "^6.1.0",
 		"typescript": "~5.8.3",
 		"typescript-eslint": "^8.46.2"
 	},
 	"prettier": "@companion-module/tools/.prettierrc.json",
+	"lint-staged": {
+		"*.{css,json,md,scss}": [
+			"prettier --write"
+		],
+		"*.{ts,tsx,js,jsx}": [
+			"yarn lint:raw --fix"
+		]
+	},
 	"packageManager": "yarn@4.12.0"
 }

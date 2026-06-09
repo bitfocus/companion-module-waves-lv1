@@ -18,14 +18,30 @@ import type { LV1Instance } from './main.js'
 
 /** Companion-facing label tag per group. */
 const GROUP_TAG: Record<number, string> = {
-	0: 'In', 1: 'Grp', 2: 'Aux', 3: 'LR', 4: 'C', 5: 'M',
-	6: 'Mtx', 7: 'Cue', 8: 'TB', 12: 'DCA',
+	0: 'In',
+	1: 'Grp',
+	2: 'Aux',
+	3: 'LR',
+	4: 'C',
+	5: 'M',
+	6: 'Mtx',
+	7: 'Cue',
+	8: 'TB',
+	12: 'DCA',
 }
 
 /** Variable-name-safe slug per group. */
 const GROUP_SLUG: Record<number, string> = {
-	0: 'in', 1: 'grp', 2: 'aux', 3: 'lr', 4: 'c', 5: 'm',
-	6: 'mtx', 7: 'cue', 8: 'tb', 12: 'dca',
+	0: 'in',
+	1: 'grp',
+	2: 'aux',
+	3: 'lr',
+	4: 'c',
+	5: 'm',
+	6: 'mtx',
+	7: 'cue',
+	8: 'tb',
+	12: 'dca',
 }
 
 /** Groups where there is only one possible track (single master / sole bus). */
@@ -36,15 +52,15 @@ export function isSingletonGroup(g: number): boolean {
 /** Groups the LV1 always has, in display order. The Group dropdown lists all of them
  *  whether or not /Notify/Layers has confirmed their presence. */
 export const GROUP_CHOICES: DropdownChoice[] = [
-	{ id: 0,  label: '0 — Input' },
-	{ id: 1,  label: '1 — Group bus' },
-	{ id: 2,  label: '2 — Aux / FX' },
-	{ id: 3,  label: '3 — LR (Master)' },
-	{ id: 4,  label: '4 — Center (Master)' },
-	{ id: 5,  label: '5 — Mono (Master)' },
-	{ id: 6,  label: '6 — Matrix' },
-	{ id: 7,  label: '7 — Cue (Master)' },
-	{ id: 8,  label: '8 — Talk Back (Master)' },
+	{ id: 0, label: '0 — Input' },
+	{ id: 1, label: '1 — Group bus' },
+	{ id: 2, label: '2 — Aux / FX' },
+	{ id: 3, label: '3 — LR (Master)' },
+	{ id: 4, label: '4 — Center (Master)' },
+	{ id: 5, label: '5 — Mono (Master)' },
+	{ id: 6, label: '6 — Matrix' },
+	{ id: 7, label: '7 — Cue (Master)' },
+	{ id: 8, label: '8 — Talk Back (Master)' },
 	{ id: 12, label: '12 — DCA' },
 ]
 
@@ -107,7 +123,11 @@ function countInputs(self: LV1Instance): number {
 export function resolveChannel(options: Record<string, unknown>, group: number): number {
 	if (isSingletonGroup(group)) return 0
 	const fieldByGroup: Record<number, string> = {
-		0: 'ch_in', 1: 'ch_grp', 2: 'ch_aux', 6: 'ch_mtx', 12: 'ch_dca',
+		0: 'ch_in',
+		1: 'ch_grp',
+		2: 'ch_aux',
+		6: 'ch_mtx',
+		12: 'ch_dca',
 	}
 	const field = fieldByGroup[group]
 	const v = field ? options[field] : undefined
@@ -124,19 +144,65 @@ export function resolveChannel(options: Record<string, unknown>, group: number):
  *  IMPORTANT: Companion serializes `isVisible` and evaluates it in the browser,
  *  so it CANNOT capture closure variables. We pass the expected group via
  *  `isVisibleData` instead. */
-export function buildChannelOptions(self: LV1Instance, idPrefix = 'ch'): Array<{
-	id: string; type: 'dropdown'; label: string; default: number;
+export function buildChannelOptions(
+	self: LV1Instance,
+	idPrefix = 'ch',
+): Array<{
+	id: string
+	type: 'dropdown'
+	label: string
+	default: number
 	choices: DropdownChoice[]
 	isVisible: (opts: Record<string, unknown>, data: { group: number }) => boolean
 	isVisibleData: { group: number }
 }> {
 	const visFn = (opts: Record<string, unknown>, data: { group: number }) => Number(opts.group) === data.group
 	return [
-		{ id: `${idPrefix}_in`,  type: 'dropdown', label: 'Channel',   default: 1, choices: channelsFor(self, 0),  isVisible: visFn, isVisibleData: { group: 0  } },
-		{ id: `${idPrefix}_grp`, type: 'dropdown', label: 'Group bus', default: 1, choices: channelsFor(self, 1),  isVisible: visFn, isVisibleData: { group: 1  } },
-		{ id: `${idPrefix}_aux`, type: 'dropdown', label: 'Aux',       default: 1, choices: channelsFor(self, 2),  isVisible: visFn, isVisibleData: { group: 2  } },
-		{ id: `${idPrefix}_mtx`, type: 'dropdown', label: 'Matrix',    default: 1, choices: channelsFor(self, 6),  isVisible: visFn, isVisibleData: { group: 6  } },
-		{ id: `${idPrefix}_dca`, type: 'dropdown', label: 'DCA',       default: 1, choices: channelsFor(self, 12), isVisible: visFn, isVisibleData: { group: 12 } },
+		{
+			id: `${idPrefix}_in`,
+			type: 'dropdown',
+			label: 'Channel',
+			default: 1,
+			choices: channelsFor(self, 0),
+			isVisible: visFn,
+			isVisibleData: { group: 0 },
+		},
+		{
+			id: `${idPrefix}_grp`,
+			type: 'dropdown',
+			label: 'Group bus',
+			default: 1,
+			choices: channelsFor(self, 1),
+			isVisible: visFn,
+			isVisibleData: { group: 1 },
+		},
+		{
+			id: `${idPrefix}_aux`,
+			type: 'dropdown',
+			label: 'Aux',
+			default: 1,
+			choices: channelsFor(self, 2),
+			isVisible: visFn,
+			isVisibleData: { group: 2 },
+		},
+		{
+			id: `${idPrefix}_mtx`,
+			type: 'dropdown',
+			label: 'Matrix',
+			default: 1,
+			choices: channelsFor(self, 6),
+			isVisible: visFn,
+			isVisibleData: { group: 6 },
+		},
+		{
+			id: `${idPrefix}_dca`,
+			type: 'dropdown',
+			label: 'DCA',
+			default: 1,
+			choices: channelsFor(self, 12),
+			isVisible: visFn,
+			isVisibleData: { group: 12 },
+		},
 	]
 }
 
@@ -152,12 +218,12 @@ export function enumerateTracks(self: LV1Instance): Array<{ group: number; ch: n
 	for (let i = 0; i < inputCount; i++) out.push({ group: 0, ch: i })
 	for (let i = 0; i < 8; i++) out.push({ group: 1, ch: i })
 	for (let i = 0; i < auxCount; i++) out.push({ group: 2, ch: i })
-	out.push({ group: 3, ch: 0 })   // LR
-	out.push({ group: 4, ch: 0 })   // Center
-	out.push({ group: 5, ch: 0 })   // Mono
+	out.push({ group: 3, ch: 0 }) // LR
+	out.push({ group: 4, ch: 0 }) // Center
+	out.push({ group: 5, ch: 0 }) // Mono
 	for (let i = 0; i < 8; i++) out.push({ group: 6, ch: i })
-	out.push({ group: 7, ch: 0 })   // Cue
-	out.push({ group: 8, ch: 0 })   // TalkBack
+	out.push({ group: 7, ch: 0 }) // Cue
+	out.push({ group: 8, ch: 0 }) // TalkBack
 	for (let i = 0; i < 8; i++) out.push({ group: 12, ch: i })
 	return out
 }

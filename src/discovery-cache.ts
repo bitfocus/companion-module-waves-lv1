@@ -7,12 +7,13 @@
 // The config dropdown reads from this cache. After a scan, the user reopens the config
 // dialog to see the fresh list.
 
-import { discover, DiscoveryEntry } from './zdns-discover.js'
+import { discover, DiscoverHandle, DiscoveryEntry } from './zdns-discover.js'
 
 let cache: DiscoveryEntry[] = []
 let cacheTimestamp = 0
 let initialScanStarted = false
 let scanInFlight: Promise<DiscoveryEntry[]> | null = null
+let scanHandle: DiscoverHandle | null = null
 
 export function getDiscoveryCache(): { entries: DiscoveryEntry[]; ageMs: number } {
 	return { entries: cache, ageMs: cacheTimestamp ? Date.now() - cacheTimestamp : -1 }
@@ -21,7 +22,9 @@ export function getDiscoveryCache(): { entries: DiscoveryEntry[]; ageMs: number 
 /** Run a discovery now. If one is already in flight, returns the same promise. */
 export async function refreshDiscovery(timeoutMs = 5000): Promise<DiscoveryEntry[]> {
 	if (scanInFlight) return scanInFlight
-	scanInFlight = discover({ timeoutMs })
+	const handle = discover({ timeoutMs })
+	scanHandle = handle
+	scanInFlight = handle.done
 		.then((results) => {
 			if (results.length > 0) {
 				cache = results
@@ -31,8 +34,14 @@ export async function refreshDiscovery(timeoutMs = 5000): Promise<DiscoveryEntry
 		})
 		.finally(() => {
 			scanInFlight = null
+			scanHandle = null
 		})
 	return scanInFlight
+}
+
+/** Cancel any in-flight discovery scan. Safe to call when nothing is running. */
+export function cancelDiscovery(): void {
+	scanHandle?.stop()
 }
 
 /** Trigger one initial discovery the first time a module instance loads. Idempotent. */

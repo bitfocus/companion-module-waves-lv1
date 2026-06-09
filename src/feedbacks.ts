@@ -30,7 +30,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			options: trackPicker,
 			callback: (fb) => {
 				const group = Number(fb.options.group)
-				const ch = resolveChannel(fb.options as Record<string, unknown>, group)
+				const ch = resolveChannel(fb.options, group)
 				return self.channels.get(`${group}.${ch}`)?.muted ?? false
 			},
 		},
@@ -42,7 +42,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			options: trackPicker,
 			callback: (fb) => {
 				const group = Number(fb.options.group)
-				const ch = resolveChannel(fb.options as Record<string, unknown>, group)
+				const ch = resolveChannel(fb.options, group)
 				return self.channels.get(`${group}.${ch}`)?.solo ?? false
 			},
 		},
@@ -64,9 +64,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			name: 'Talk Back engaged to output',
 			description: 'True when this output is enabled as a TalkBack destination in the LV1 panel.',
 			defaultStyle: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
-			options: [
-				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
-			],
+			options: [{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) }],
 			callback: (fb) => {
 				const aux = Number(fb.options.aux) - 1
 				return self.tbDestEnabled.get(aux) ?? false
@@ -115,7 +113,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			options: trackPicker,
 			callback: (fb) => {
 				const group = Number(fb.options.group)
-				const ch = resolveChannel(fb.options as Record<string, unknown>, group)
+				const ch = resolveChannel(fb.options, group)
 				const c = self.channels.get(`${group}.${ch}`)?.color
 				if (!c) return {}
 				return {
@@ -136,7 +134,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			],
 			callback: (fb) => {
 				const group = Number(fb.options.group)
-				const ch = resolveChannel(fb.options as Record<string, unknown>, group)
+				const ch = resolveChannel(fb.options, group)
 				const sub = Number(fb.options.sub)
 				const db = self.meters.get(`${group}.${ch}.${sub}`)
 				if (db == null) return false
@@ -158,9 +156,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			name: 'Flip-to-faders active (specific aux)',
 			description: 'True when flipped to this aux. Requires "Aux Cue On Flip" enabled on the LV1.',
 			defaultStyle: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
-			options: [
-				{ id: 'aux', type: 'dropdown', label: 'Aux', default: 1, choices: channelsFor(self, 2) },
-			],
+			options: [{ id: 'aux', type: 'dropdown', label: 'Aux', default: 1, choices: channelsFor(self, 2) }],
 			callback: (fb) => {
 				const t = self.currentFlipTarget
 				if (!t || t.group !== 2) return false
@@ -187,11 +183,12 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 					type: 'dropdown',
 					label: 'Scene',
 					default: 0,
-					choices: self.scenes.size > 0
-						? [...self.scenes.entries()]
-							.sort(([a], [b]) => a - b)
-							.map(([idx, name]) => ({ id: idx, label: `${idx + 1} — ${name}` }))
-						: [{ id: 0, label: '(no scenes detected yet)' }],
+					choices:
+						self.scenes.size > 0
+							? [...self.scenes.entries()]
+									.sort(([a], [b]) => a - b)
+									.map(([idx, name]) => ({ id: idx, label: `${idx + 1} — ${name}` }))
+							: [{ id: 0, label: '(no scenes detected yet)' }],
 				},
 			],
 			callback: (fb) => self.currentScene === Number(fb.options.scene),

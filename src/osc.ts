@@ -170,14 +170,14 @@ export function decodePacket(buf: Buffer): OscMessage {
 export function intArg(m: OscMessage, idx: number): number | undefined {
 	const a = m.args[idx]
 	if (!a) return undefined
-	if (a.type === 'i' || a.type === 'f') return a.value as number
-	if (a.type === 'd') return a.value as number
+	if (a.type === 'i' || a.type === 'f') return a.value
+	if (a.type === 'd') return a.value
 	return undefined
 }
 
 export function stringArg(m: OscMessage, idx: number): string | undefined {
 	const a = m.args[idx]
-	return a && a.type === 's' ? (a.value as string) : undefined
+	return a && a.type === 's' ? a.value : undefined
 }
 
 export function boolArg(m: OscMessage, idx: number): boolean | undefined {

@@ -1,10 +1,23 @@
-import eslint from '@eslint/js'
-import tseslint from 'typescript-eslint'
+import { generateEslintConfig } from '@companion-module/tools/eslint/config.mjs'
 
-export default tseslint.config(
-	eslint.configs.recommended,
-	...tseslint.configs.recommended,
+const baseConfig = await generateEslintConfig({
+	enableTypescript: true,
+})
+
+const customConfig = [
+	...baseConfig,
 	{
-		ignores: ['dist/**', 'node_modules/**'],
-	}
-)
+		files: ['src/**/*.ts', 'src/**/*.js', 'src/**/*.mjs'],
+	},
+	{
+		rules: {
+			'no-use-before-define': 'off',
+			'@typescript-eslint/no-use-before-define': 'off',
+			'no-unused-vars': 'off',
+			'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+			'@typescript-eslint/no-explicit-any': 'off',
+		},
+	},
+]
+
+export default customConfig

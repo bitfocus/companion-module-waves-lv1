@@ -16,7 +16,7 @@ import { UpdatePresets } from './presets.js'
 import { UpgradeScripts } from './upgrades.js'
 import { OscTcpClient } from './osc-tcp.js'
 import { discover } from './zdns-discover.js'
-import { ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
+import { cancelDiscovery, ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
 import { trackSlug } from './tracks.js'
@@ -27,8 +27,8 @@ interface ChannelState {
 	solo: boolean
 	color: { r: number; g: number; b: number } | null
 	name: string | null
-	pan: number    // -1 (full L) … +1 (full R), 0 = center
-	width: number  // 0 (mono) … 1 (full stereo)
+	pan: number // -1 (full L) … +1 (full R), 0 = center
+	width: number // 0 (mono) … 1 (full stereo)
 }
 interface SendState {
 	on: boolean
@@ -118,6 +118,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	}
 
 	async destroy(): Promise<void> {
+		// Cancel any in-flight zDNS discovery so the dgram socket releases its
+		// multicast membership immediately (otherwise it lingers until the 6 s
+		// scan timeout, and a rapid delete-recreate cycle stacks sockets on
+		// the fixed port 13337).
+		cancelDiscovery()
 		for (const t of this.activeFades.values()) clearInterval(t)
 		this.activeFades.clear()
 		if (this.osc) {
@@ -128,9 +133,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
 		const restart =
-			this.config.selected !== config.selected ||
-			this.config.host !== config.host ||
-			this.config.port !== config.port
+			this.config.selected !== config.selected || this.config.host !== config.host || this.config.port !== config.port
 		this.config = config
 
 		this.updateActions()
@@ -143,6 +146,26 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.osc.disconnect()
 				this.osc = null
 			}
+			// L3: clear all mixer-state derived from the previous host so feedbacks
+			// don't briefly render the old mixer's values during the cross-over, and
+			// a carried-over failure count doesn't trigger a spurious re-discovery.
+			this.channels.clear()
+			this.sends.clear()
+			this.muteGroups.clear()
+			this.meters.clear()
+			this.scenes.clear()
+			this.userKeys.clear()
+			this.spillStates.clear()
+			this.tbDestEnabled.clear()
+			this.detected = {}
+			this.consecutiveFailures = 0
+			this.currentFlipTarget = null
+			this.currentMixer = null
+			this.currentLayer = null
+			this.currentScene = null
+			this.currentSceneName = null
+			this.lastTempoBpm = null
+			cancelDiscovery()
 			await this.connectIfReady()
 		}
 	}
@@ -200,7 +223,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			const entries = await discover({
 				timeoutMs: 6000,
 				filterHostIp: host || undefined,
-			})
+			}).done
 			if (!entries.length) {
 				this.updateStatus(
 					InstanceStatus.BadConfig,
@@ -308,9 +331,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			}
 			case '/Notify/Track/Pan': {
 				// ,iid [g, ch, value(-1..+1)]
-				const g = intArg(m, 0), ch = intArg(m, 1)
+				const g = intArg(m, 0),
+					ch = intArg(m, 1)
 				const dArg = m.args[2]
-				const v = dArg?.type === 'd' || dArg?.type === 'f' ? (dArg.value as number) : null
+				const v = dArg?.type === 'd' || dArg?.type === 'f' ? dArg.value : null
 				if (g == null || ch == null || v == null) return
 				this.ensureChannel(g, ch).pan = v
 				pushTrackVariable(this, g, ch, 'pan')
@@ -319,9 +343,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			case '/Notify/Track/Pan/Width':
 			case '/Notify/PanArcWidth': {
 				// Both observed in catalog; pick first numeric arg after g, ch.
-				const g = intArg(m, 0), ch = intArg(m, 1)
+				const g = intArg(m, 0),
+					ch = intArg(m, 1)
 				const dArg = m.args[2]
-				const v = dArg?.type === 'd' || dArg?.type === 'f' ? (dArg.value as number) : null
+				const v = dArg?.type === 'd' || dArg?.type === 'f' ? dArg.value : null
 				if (g == null || ch == null || v == null) return
 				this.ensureChannel(g, ch).width = v
 				pushTrackVariable(this, g, ch, 'width')
@@ -332,11 +357,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					ch = intArg(m, 1)
 				// Gain can arrive as int (legacy) or float — accept both.
 				const dbArg = m.args[2]
-				const db = dbArg?.type === 'f' || dbArg?.type === 'd' || dbArg?.type === 'i'
-					? (dbArg.value as number) : null
+				const db = dbArg?.type === 'f' || dbArg?.type === 'd' || dbArg?.type === 'i' ? dbArg.value : null
 				if (g == null || ch == null || db == null) return
 				this.ensureChannel(g, ch).gain = db
-				this.checkFeedbacks('channelGain')
 				pushTrackVariable(this, g, ch, 'gain')
 				break
 			}
@@ -355,8 +378,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				// Verified live: /Notify/UserKeyInfo i:0 "Mon 1" "Flip Sends: MX1: Mon 1" i:1
 				// Sent for each of the 16 user keys during the initial state flood.
 				const k = intArg(m, 0)
-				const name = m.args[1]?.type === 's' ? (m.args[1].value as string) : null
-				const func = m.args[2]?.type === 's' ? (m.args[2].value as string) : null
+				const name = m.args[1]?.type === 's' ? m.args[1].value : null
+				const func = m.args[2]?.type === 's' ? m.args[2].value : null
 				const assigned = intArg(m, 3)
 				if (k == null || name == null || func == null || assigned == null) return
 				if (k < 0 || k > 31) return
@@ -365,7 +388,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.userKeys.set(k, { name, func, assigned: assigned !== 0 })
 				const k1 = k + 1
 				this.setVariableValues({
-					[`userkey_${k1}_name`]:     name,
+					[`userkey_${k1}_name`]: name,
 					[`userkey_${k1}_function`]: func,
 					[`userkey_${k1}_assigned`]: assigned !== 0 ? 'on' : 'off',
 				})
@@ -458,15 +481,14 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const s = this.sends.get(key) ?? { on: false, gain: -144 }
 				s.gain = db
 				this.sends.set(key, s)
-				this.checkFeedbacks('sendGain')
 				break
 			}
 			case '/Notify/TrackColor': {
 				const g = intArg(m, 0),
 					ch = intArg(m, 1)
-				const r = m.args[3]?.type === 'f' ? (m.args[3].value as number) : null
-				const gC = m.args[4]?.type === 'f' ? (m.args[4].value as number) : null
-				const b = m.args[5]?.type === 'f' ? (m.args[5].value as number) : null
+				const r = m.args[3]?.type === 'f' ? m.args[3].value : null
+				const gC = m.args[4]?.type === 'f' ? m.args[4].value : null
+				const b = m.args[5]?.type === 'f' ? m.args[5].value : null
 				if (g == null || ch == null || r == null || gC == null || b == null) return
 				this.ensureChannel(g, ch).color = { r, g: gC, b }
 				this.checkFeedbacks('channelColor')
@@ -477,10 +499,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			case '/Notify/TrackName': {
 				const g = intArg(m, 0),
 					ch = intArg(m, 1)
-				const name = m.args[2]?.type === 's' ? (m.args[2].value as string) : null
+				const name = m.args[2]?.type === 's' ? m.args[2].value : null
 				if (g == null || ch == null || name == null) return
 				this.ensureChannel(g, ch).name = name
-				this.checkFeedbacks('channelName')
 				pushTrackVariable(this, g, ch, 'name')
 				break
 			}
@@ -493,7 +514,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				//   We only need name + group + ch for the picker labels & variables.
 				//   See lv1_channels_endpoint.md memory for full schema.
 				const args = m.args
-				const count = args[0]?.type === 'i' ? (args[0].value as number) : 0
+				const count = args[0]?.type === 'i' ? args[0].value : 0
 				if (count <= 0 || count > 256) break
 				let updated = 0
 				for (let i = 0; i < count; i++) {
@@ -503,9 +524,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					const groupArg = args[base + 1]
 					const chArg = args[base + 2]
 					if (nameArg?.type !== 's' || groupArg?.type !== 'i' || chArg?.type !== 'i') continue
-					const name = nameArg.value as string
-					const group = groupArg.value as number
-					const ch = chArg.value as number
+					const name = nameArg.value
+					const group = groupArg.value
+					const ch = chArg.value
 					const s = this.ensureChannel(group, ch)
 					if (s.name !== name) {
 						s.name = name
@@ -521,10 +542,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				break
 			}
 			case '/Notify/Tempo': {
-				const bpm = m.args[0]?.type === 'f' ? (m.args[0].value as number) : null
+				const bpm = m.args[0]?.type === 'f' ? m.args[0].value : null
 				if (bpm != null) {
 					this.lastTempoBpm = bpm
-					this.checkFeedbacks('tempo')
 					this.setVariableValues({ tempo: bpm.toFixed(1) })
 				}
 				break
@@ -537,14 +557,13 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const mixerPage = intArg(m, 0)
 				const layer = intArg(m, 1)
 				if (mixerPage != null) {
-					this.currentMixer = mixerPage + 1   // 1-based for display
+					this.currentMixer = mixerPage + 1 // 1-based for display
 				}
 				if (layer != null) {
 					this.currentLayer = layer
-					this.checkFeedbacks('currentLayer')
 				}
 				this.setVariableValues({
-					current_mixer:       this.currentMixer ?? '',
+					current_mixer: this.currentMixer ?? '',
 					current_layer_index: this.currentLayer != null ? this.currentLayer + 1 : '',
 				})
 				break
@@ -554,7 +573,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				if (idx != null) {
 					this.currentScene = idx
 					this.currentSceneName = this.scenes.get(idx) ?? null
-					this.checkFeedbacks('currentScene')
+					this.checkFeedbacks('currentScene', 'currentSceneByName')
 					this.setVariableValues({
 						scene_index: idx,
 						scene_name: this.currentSceneName ?? '',
@@ -564,12 +583,12 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			}
 			case '/Notify/Scene/Name': {
 				// ,s "Scene Name" — broadcast for the CURRENT scene only (e.g. on a rename or recall).
-				const name = m.args[0]?.type === 's' ? (m.args[0].value as string) : null
+				const name = m.args[0]?.type === 's' ? m.args[0].value : null
 				if (name == null) break
 				this.currentSceneName = name
 				// Also update the catalog entry if we know the current index
 				if (this.currentScene != null) this.scenes.set(this.currentScene, name)
-				this.checkFeedbacks('currentScene')
+				this.checkFeedbacks('currentScene', 'currentSceneByName')
 				this.setVariableValues({ scene_name: name })
 				// Update dropdowns/variables so the new name shows up in pickers
 				this.updateActions()
@@ -586,7 +605,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					const idxArg = m.args[1 + i]
 					const nameArg = m.args[1 + i + 1]
 					if (idxArg?.type !== 'i' || nameArg?.type !== 's') continue
-					fresh.set(idxArg.value as number, nameArg.value as string)
+					fresh.set(idxArg.value, nameArg.value)
 				}
 				this.scenes = fresh
 				// Refresh current scene name if we have an index
@@ -619,7 +638,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					}
 				}
 				if (Object.keys(vuValues).length > 0) this.setVariableValues(vuValues)
-				this.checkFeedbacks('meter')
+				this.checkFeedbacks('meterLevel')
 				break
 			}
 			case '/Aux/Tracks': {
@@ -630,13 +649,16 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const names: string[] = []
 				for (let i = 1; i + 2 < m.args.length; i += 3) {
 					const nameArg = m.args[i + 2]
-					if (nameArg?.type === 's') names.push(nameArg.value as string)
+					if (nameArg?.type === 's') names.push(nameArg.value)
 				}
 				const changed = this.detected.auxes !== count
 				this.detected.auxes = count
 				this.detected.auxNames = names
 				if (changed) {
-					this.log('info', `LV1 reports ${count} aux buses (${names.slice(0, 4).join(', ')}${names.length > 4 ? '…' : ''})`)
+					this.log(
+						'info',
+						`LV1 reports ${count} aux buses (${names.slice(0, 4).join(', ')}${names.length > 4 ? '…' : ''})`,
+					)
 					this.updateActions()
 					this.updateFeedbacks()
 					this.updatePresets()
@@ -688,8 +710,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					const nameArg = args[idx++]
 					const countArg = args[idx++]
 					if (!nameArg || nameArg.type !== 's' || !countArg || countArg.type !== 'i') break
-					const name = nameArg.value as string
-					const entryCount = countArg.value as number
+					const name = nameArg.value
+					const entryCount = countArg.value
 					const entries: Array<{ group: number; ch: number } | null> = []
 					for (let e = 0; e < entryCount && idx + 1 < args.length; e++) {
 						const g = args[idx++]?.value as number
@@ -813,10 +835,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.checkFeedbacks('channelSolo', 'anySolo')
 			pushTrackVariable(this, group, ch, 'solo')
 		}
-		if (delta.gain != null)  pushTrackVariable(this, group, ch, 'gain')
-		if (delta.pan != null)   pushTrackVariable(this, group, ch, 'pan')
+		if (delta.gain != null) pushTrackVariable(this, group, ch, 'gain')
+		if (delta.pan != null) pushTrackVariable(this, group, ch, 'pan')
 		if (delta.width != null) pushTrackVariable(this, group, ch, 'width')
-		if (delta.name != null)  pushTrackVariable(this, group, ch, 'name')
+		if (delta.name != null) pushTrackVariable(this, group, ch, 'name')
 	}
 
 	applySendDelta(group: number, ch: number, aux: number, delta: Partial<SendState>): void {
@@ -842,10 +864,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		}
 		this.setVariableValues({
 			flip_active: active ? 'on' : 'off',
-			flip_group:  t ? t.group : 3,
-			flip_ch:     t ? t.ch : 0,
-			flip_name:   name,
-			flip_aux:    aux1based,
+			flip_group: t ? t.group : 3,
+			flip_ch: t ? t.ch : 0,
+			flip_name: name,
+			flip_aux: aux1based,
 		})
 	}
 

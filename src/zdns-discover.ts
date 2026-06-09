@@ -68,8 +68,8 @@ function parseZDNS(buf: Buffer): ZDNSParsed | null {
 	const args = msg.args
 	if (args.length < 2 || args[0].type !== 's') return null
 
-	const service = args[0].value as string
-	const uuid = args[1] && args[1].type === 's' ? (args[1].value as string) : null
+	const service = args[0].value
+	const uuid = args[1] && args[1].type === 's' ? args[1].value : null
 
 	let host: string | null = null
 	let port: number | null = null
@@ -78,12 +78,12 @@ function parseZDNS(buf: Buffer): ZDNSParsed | null {
 	for (let i = 2; i < args.length; i++) {
 		const a = args[i]
 		if (a.type === 's') {
-			const v = a.value as string
+			const v = a.value
 			if (ipv4Like(v)) ipv4s.push(v)
 			else if (ipv6Like(v)) ipv6s.push(v)
 			else if (host == null && v.length > 0) host = v
 		} else if (a.type === 'i' && port == null) {
-			const n = a.value as number
+			const n = a.value
 			if (n > 1024 && n < 65536) port = n
 		}
 	}
@@ -104,82 +104,112 @@ export interface DiscoverHandle {
 	stop: () => void
 }
 
-export function discover(opts: DiscoverOptions = {}): Promise<DiscoveryEntry[]> {
+/** Returned by `discover()` so callers can cancel an in-flight scan
+ *  (e.g. on module `destroy()` or `configUpdated`). Awaiting `done`
+ *  always resolves to the entries collected so far. */
+export interface DiscoverHandle {
+	stop: () => void
+	done: Promise<DiscoveryEntry[]>
+}
+
+export function discover(opts: DiscoverOptions = {}): DiscoverHandle {
 	const timeoutMs = opts.timeoutMs ?? 6000
 	const wantService = opts.filterService ?? '_waveslv113._tcp'
 	const filterIp = opts.filterHostIp
 
-	return new Promise<DiscoveryEntry[]>((resolve) => {
-		const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
-		const found = new Map<string, DiscoveryEntry>()
-		let resolved = false
+	let socket: dgram.Socket | null = null
+	let timer: NodeJS.Timeout | null = null
+	let resolved = false
+	let resolveFn: (v: DiscoveryEntry[]) => void = () => {}
+	const found = new Map<string, DiscoveryEntry>()
 
-		const finish = () => {
-			if (resolved) return
-			resolved = true
+	const done = new Promise<DiscoveryEntry[]>((resolve) => {
+		resolveFn = resolve
+	})
+
+	const finish = () => {
+		if (resolved) return
+		resolved = true
+		if (timer) {
+			clearTimeout(timer)
+			timer = null
+		}
+		if (socket) {
 			try {
 				socket.close()
 			} catch {
 				/* ignore */
 			}
-			resolve([...found.values()])
+			socket = null
 		}
+		resolveFn([...found.values()])
+	}
 
-		socket.on('error', () => finish())
+	try {
+		socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+	} catch {
+		// dgram construction can throw on hardened platforms — resolve empty
+		queueMicrotask(finish)
+		return { stop: finish, done }
+	}
 
-		socket.on('message', (buf, rinfo) => {
-			const z = parseZDNS(buf)
-			if (!z) return
-			if (z.service !== wantService) return
-			if (filterIp && !z.ipv4s.includes(filterIp)) return
+	socket.on('error', () => finish())
 
-			const addresses = [...z.ipv4s].sort((a, b) => rankIp(b) - rankIp(a))
-			const key = `${z.service}|${z.host}|${z.port}`
-			if (found.has(key)) return
-			const entry: DiscoveryEntry = {
-				service: z.service,
-				uuid: z.uuid,
-				host: z.host,
-				port: z.port,
-				addresses,
-				ipv6: z.ipv6s,
-				source: rinfo.address,
+	socket.on('message', (buf, rinfo) => {
+		const z = parseZDNS(buf)
+		if (!z) return
+		if (z.service !== wantService) return
+		if (filterIp && !z.ipv4s.includes(filterIp)) return
+
+		const addresses = [...z.ipv4s].sort((a, b) => rankIp(b) - rankIp(a))
+		const key = `${z.service}|${z.host}|${z.port}`
+		if (found.has(key)) return
+		const entry: DiscoveryEntry = {
+			service: z.service,
+			uuid: z.uuid,
+			host: z.host,
+			port: z.port,
+			addresses,
+			ipv6: z.ipv6s,
+			source: rinfo.address,
+		}
+		found.set(key, entry)
+		opts.onFound?.(entry)
+	})
+
+	socket.bind(MCAST_PORT, () => {
+		if (!socket) return
+		try {
+			socket.setBroadcast(true)
+		} catch {
+			/* ignore */
+		}
+		// Join the multicast group on every non-internal IPv4 interface so we
+		// catch the announcement regardless of which NIC the LV1 lives on.
+		const ifaces = os.networkInterfaces()
+		let joinedAny = false
+		for (const list of Object.values(ifaces)) {
+			if (!list) continue
+			for (const iface of list) {
+				if (iface.family !== 'IPv4' || iface.internal) continue
+				try {
+					socket.addMembership(MCAST_ADDR, iface.address)
+					joinedAny = true
+				} catch {
+					/* some Windows ifaces refuse multicast — ignore */
+				}
 			}
-			found.set(key, entry)
-			opts.onFound?.(entry)
-		})
-
-		socket.bind(MCAST_PORT, () => {
+		}
+		if (!joinedAny) {
 			try {
-				socket.setBroadcast(true)
+				socket.addMembership(MCAST_ADDR)
 			} catch {
 				/* ignore */
 			}
-			// Join the multicast group on every non-internal IPv4 interface so we
-			// catch the announcement regardless of which NIC the LV1 lives on.
-			const ifaces = os.networkInterfaces()
-			let joinedAny = false
-			for (const list of Object.values(ifaces)) {
-				if (!list) continue
-				for (const iface of list) {
-					if (iface.family !== 'IPv4' || iface.internal) continue
-					try {
-						socket.addMembership(MCAST_ADDR, iface.address)
-						joinedAny = true
-					} catch {
-						/* some Windows ifaces refuse multicast — ignore */
-					}
-				}
-			}
-			if (!joinedAny) {
-				try {
-					socket.addMembership(MCAST_ADDR)
-				} catch {
-					/* ignore */
-				}
-			}
-		})
-
-		setTimeout(finish, timeoutMs)
+		}
 	})
+
+	timer = setTimeout(finish, timeoutMs)
+
+	return { stop: finish, done }
 }

@@ -26,11 +26,13 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{
-				feedbackId: 'channelMute',
-				options: { group: 0, ch_in: ch },
-				style: { bgcolor: combineRgb(180, 30, 30), color: combineRgb(255, 255, 255) },
-			}],
+			feedbacks: [
+				{
+					feedbackId: 'channelMute',
+					options: { group: 0, ch_in: ch },
+					style: { bgcolor: combineRgb(180, 30, 30), color: combineRgb(255, 255, 255) },
+				},
+			],
 		}
 	}
 
@@ -52,11 +54,13 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{
-				feedbackId: 'channelSolo',
-				options: { group: 0, ch_in: ch },
-				style: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
-			}],
+			feedbacks: [
+				{
+					feedbackId: 'channelSolo',
+					options: { group: 0, ch_in: ch },
+					style: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
+				},
+			],
 		}
 	}
 
@@ -73,11 +77,13 @@ export function UpdatePresets(self: LV1Instance): void {
 				bgcolor: combineRgb(30, 30, 30),
 			},
 			steps: [{ down: [{ actionId: 'muteGroup', options: { group: g, state: 'toggle' } }], up: [] }],
-			feedbacks: [{
-				feedbackId: 'muteGroup',
-				options: { group: g },
-				style: { bgcolor: combineRgb(200, 60, 60), color: combineRgb(255, 255, 255) },
-			}],
+			feedbacks: [
+				{
+					feedbackId: 'muteGroup',
+					options: { group: g },
+					style: { bgcolor: combineRgb(200, 60, 60), color: combineRgb(255, 255, 255) },
+				},
+			],
 		}
 	}
 
@@ -121,11 +127,13 @@ export function UpdatePresets(self: LV1Instance): void {
 			bgcolor: combineRgb(30, 30, 30),
 		},
 		steps: [{ down: [{ actionId: 'clearAllSolo', options: {} }], up: [] }],
-		feedbacks: [{
-			feedbackId: 'anySolo',
-			options: {},
-			style: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
-		}],
+		feedbacks: [
+			{
+				feedbackId: 'anySolo',
+				options: {},
+				style: { bgcolor: combineRgb(200, 160, 30), color: combineRgb(0, 0, 0) },
+			},
+		],
 	}
 
 	// Flip Sends presets — one per User Key configured on the LV1 with the
@@ -152,13 +160,16 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: auxIdx >= 0
-				? [{
-					feedbackId: 'flipForTarget',
-					options: { aux: auxIdx + 1 },
-					style: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
-				}]
-				: [],
+			feedbacks:
+				auxIdx >= 0
+					? [
+							{
+								feedbackId: 'flipForTarget',
+								options: { aux: auxIdx + 1 },
+								style: { bgcolor: combineRgb(220, 130, 30), color: combineRgb(0, 0, 0) },
+							},
+						]
+					: [],
 		}
 	}
 
@@ -184,11 +195,13 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{
-				feedbackId: 'talkBackToOutput',
-				options: { aux },
-				style: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
-			}],
+			feedbacks: [
+				{
+					feedbackId: 'talkBackToOutput',
+					options: { aux },
+					style: { bgcolor: combineRgb(220, 50, 50), color: combineRgb(255, 255, 255) },
+				},
+			],
 		}
 	}
 
@@ -211,11 +224,13 @@ export function UpdatePresets(self: LV1Instance): void {
 					up: [],
 				},
 			],
-			feedbacks: [{
-				feedbackId: 'spillActive',
-				options: { bank, idx: 0 },
-				style: { bgcolor: combineRgb(160, 120, 200), color: combineRgb(0, 0, 0) },
-			}],
+			feedbacks: [
+				{
+					feedbackId: 'spillActive',
+					options: { bank, idx: 0 },
+					style: { bgcolor: combineRgb(160, 120, 200), color: combineRgb(0, 0, 0) },
+				},
+			],
 		}
 	}
 

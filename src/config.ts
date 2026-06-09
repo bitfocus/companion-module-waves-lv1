@@ -1,4 +1,4 @@
-import { SomeCompanionConfigField } from '@companion-module/base'
+import { SomeCompanionConfigField, Regex } from '@companion-module/base'
 import { getDiscoveryCache, refreshDiscovery } from './discovery-cache.js'
 
 export interface ModuleConfig {
@@ -25,7 +25,10 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} discovered (cached ${ageStr}). A fresh scan was just kicked off — close and reopen this dialog to see updated results.`
 
 	const selectChoices = [
-		{ id: '', label: entries.length ? '— pick one or use custom IP below —' : '— none discovered, use custom IP below —' },
+		{
+			id: '',
+			label: entries.length ? '— pick one or use custom IP below —' : '— none discovered, use custom IP below —',
+		},
 		...entries.map((e) => ({
 			id: `${e.addresses[0] || ''}:${e.port || ''}`,
 			label: `${e.host || 'unknown'}  —  ${e.addresses[0] || '?'}:${e.port ?? '?'}`,
@@ -54,7 +57,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			label: 'Custom address (override)',
 			width: 12,
 			value:
-				'Optional — only fill these if the LV1 isn\'t discoverable (e.g. routed network). Manual host with port=0 will still auto-discover the port for that IP.',
+				"Optional — only fill these if the LV1 isn't discoverable (e.g. routed network). Manual host with port=0 will still auto-discover the port for that IP.",
 		},
 		{
 			type: 'textinput',
@@ -62,6 +65,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			label: 'LV1 IP (override)',
 			width: 6,
 			default: '',
+			regex: Regex.IP,
 		},
 		{
 			type: 'number',

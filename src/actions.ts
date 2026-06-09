@@ -51,7 +51,7 @@ export function UpdateActions(self: LV1Instance): void {
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const cur = self.channels.get(`${group}.${ch}`)?.muted ?? false
 				const mode = String(a.options.state)
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
@@ -80,7 +80,7 @@ export function UpdateActions(self: LV1Instance): void {
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const cur = self.channels.get(`${group}.${ch}`)?.solo ?? false
 				const mode = String(a.options.state)
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
@@ -94,11 +94,19 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Channel: Set output fader (dB)',
 			options: [
 				...trackPicker,
-				{ id: 'db', type: 'number', label: 'dB (−144 = mute, 0 = unity, +10 = max)', default: 0, min: -144, max: 10, step: 0.1 },
+				{
+					id: 'db',
+					type: 'number',
+					label: 'dB (−144 = mute, 0 = unity, +10 = max)',
+					default: 0,
+					min: -144,
+					max: 10,
+					step: 0.1,
+				},
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const db = Number(a.options.db)
 				self.applyChannelDelta(group, ch, { gain: db })
 				self.send('/Set/Track/Out/Gain', [intCh(group), intCh(ch), { type: 'd', value: db }])
@@ -109,11 +117,19 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Channel: Pan',
 			options: [
 				...trackPicker,
-				{ id: 'value', type: 'number', label: 'Pan (−1 = full L, +1 = full R)', default: 0, min: -1, max: 1, step: 0.05 },
+				{
+					id: 'value',
+					type: 'number',
+					label: 'Pan (−1 = full L, +1 = full R)',
+					default: 0,
+					min: -1,
+					max: 1,
+					step: 0.05,
+				},
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const v = Number(a.options.value)
 				self.applyChannelDelta(group, ch, { pan: v })
 				self.send('/Set/Track/Pan', [intCh(group), intCh(ch), { type: 'd', value: v }])
@@ -124,11 +140,19 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Channel: Stereo width',
 			options: [
 				...trackPicker,
-				{ id: 'value', type: 'number', label: 'Width (0 = mono, 1 = full stereo)', default: 1, min: 0, max: 1, step: 0.05 },
+				{
+					id: 'value',
+					type: 'number',
+					label: 'Width (0 = mono, 1 = full stereo)',
+					default: 1,
+					min: 0,
+					max: 1,
+					step: 0.05,
+				},
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const v = Number(a.options.value)
 				self.applyChannelDelta(group, ch, { width: v })
 				self.send('/Set/Track/Pan/Width', [intCh(group), intCh(ch), { type: 'd', value: v }])
@@ -190,14 +214,17 @@ export function UpdateActions(self: LV1Instance): void {
 					label: 'What to fade',
 					default: 'out',
 					choices: [
-						{ id: 'out',  label: 'Channel output fader' },
+						{ id: 'out', label: 'Channel output fader' },
 						{ id: 'send', label: 'Send fader (input channel → aux)' },
 					],
 				},
 				// ───── Channel-output mode: Group + per-group Channel picker ─────
 				{
-					id: 'group', type: 'dropdown', label: 'Group',
-					default: 0, choices: GROUP_CHOICES,
+					id: 'group',
+					type: 'dropdown',
+					label: 'Group',
+					default: 0,
+					choices: GROUP_CHOICES,
 					isVisible: (opts: Record<string, unknown>) => opts.target === 'out',
 				},
 				// Per-group channel dropdowns — visible only when target='out' AND group matches.
@@ -208,18 +235,24 @@ export function UpdateActions(self: LV1Instance): void {
 				})),
 				// ───── Send mode: Input ch + Aux ─────
 				{
-					id: 'inputCh', type: 'dropdown', label: 'Input channel',
-					default: 1, choices: channelsFor(self, 0),
+					id: 'inputCh',
+					type: 'dropdown',
+					label: 'Input channel',
+					default: 1,
+					choices: channelsFor(self, 0),
 					isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
 				},
 				{
-					id: 'aux', type: 'dropdown', label: 'Aux destination',
-					default: 1, choices: channelsFor(self, 2),
+					id: 'aux',
+					type: 'dropdown',
+					label: 'Aux destination',
+					default: 1,
+					choices: channelsFor(self, 2),
 					isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
 				},
 				// ───── Common ─────
-				{ id: 'db',       type: 'number', label: 'Target dB',     default: 0,    min: -144, max: 10,    step: 0.1 },
-				{ id: 'duration', type: 'number', label: 'Duration (ms)', default: 1000, min: 0,    max: 60000, step: 100 },
+				{ id: 'db', type: 'number', label: 'Target dB', default: 0, min: -144, max: 10, step: 0.1 },
+				{ id: 'duration', type: 'number', label: 'Duration (ms)', default: 1000, min: 0, max: 60000, step: 100 },
 			],
 			callback: async (a) => {
 				const target = String(a.options.target)
@@ -227,7 +260,7 @@ export function UpdateActions(self: LV1Instance): void {
 				const durationMs = Number(a.options.duration)
 				if (target === 'out') {
 					const group = Number(a.options.group)
-					const ch = resolveChannel(a.options as Record<string, unknown>, group)
+					const ch = resolveChannel(a.options, group)
 					const currentDb = self.channels.get(`${group}.${ch}`)?.gain ?? 0
 					self.startFade(`out_${group}.${ch}`, currentDb, targetDb, durationMs, (db) => {
 						self.applyChannelDelta(group, ch, { gain: db })
@@ -302,7 +335,10 @@ export function UpdateActions(self: LV1Instance): void {
 				{ id: 'bank', type: 'number', label: 'Bank (0 = Mixer 1, 1 = Mixer 2)', default: 0, min: 0, max: 1 },
 				{ id: 'idx', type: 'number', label: 'Slot (0-based)', default: 0, min: 0, max: 31 },
 				{
-					id: 'state', type: 'dropdown', label: 'State', default: 'toggle',
+					id: 'state',
+					type: 'dropdown',
+					label: 'State',
+					default: 'toggle',
 					choices: [
 						{ id: 'on', label: 'Spill on' },
 						{ id: 'off', label: 'Spill off' },
@@ -349,7 +385,7 @@ export function UpdateActions(self: LV1Instance): void {
 				self.applySendDelta(8, 0, aux, { on: engage, gain: targetDb })
 				self.tbDestEnabled.set(aux, engage)
 				self.checkFeedbacks('talkBackToOutput')
-				self.send('/Set/Aux/Send/On',   [intCh(8), intCh(0), intCh(aux), { type: engage ? 'T' : 'F' }])
+				self.send('/Set/Aux/Send/On', [intCh(8), intCh(0), intCh(aux), { type: engage ? 'T' : 'F' }])
 				self.send('/Set/Aux/Send/Gain', [intCh(8), intCh(0), intCh(aux), { type: 'd', value: targetDb }])
 			},
 		},
@@ -368,8 +404,11 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Aux: Focus (MyMon view)',
 			options: [
 				{
-					id: 'aux', type: 'dropdown', label: 'Aux to focus (0 = none)',
-					default: 0, choices: [{ id: 0, label: 'None' }, ...channelsFor(self, 2)],
+					id: 'aux',
+					type: 'dropdown',
+					label: 'Aux to focus (0 = none)',
+					default: 0,
+					choices: [{ id: 0, label: 'None' }, ...channelsFor(self, 2)],
 				},
 			],
 			callback: async (a) => {
@@ -451,11 +490,12 @@ export function UpdateActions(self: LV1Instance): void {
 					type: 'dropdown',
 					label: 'Scene',
 					default: 0,
-					choices: self.scenes.size > 0
-						? [...self.scenes.entries()]
-							.sort(([a], [b]) => a - b)
-							.map(([idx, name]) => ({ id: idx, label: `${idx + 1} — ${name}` }))
-						: [{ id: 0, label: '(no scenes detected yet — connect and wait for /Notify/SceneList)' }],
+					choices:
+						self.scenes.size > 0
+							? [...self.scenes.entries()]
+									.sort(([a], [b]) => a - b)
+									.map(([idx, name]) => ({ id: idx, label: `${idx + 1} — ${name}` }))
+							: [{ id: 0, label: '(no scenes detected yet — connect and wait for /Notify/SceneList)' }],
 				},
 			],
 			callback: async (a) => {
@@ -501,10 +541,7 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Preamp + plugin enables (input channels only) ───────────
 		inGain: {
 			name: 'Preamp: Set input gain (dB)',
-			options: [
-				...inputOpts,
-				{ id: 'db', type: 'number', label: 'dB', default: 20, min: -10, max: 60, step: 0.1 },
-			],
+			options: [...inputOpts, { id: 'db', type: 'number', label: 'dB', default: 20, min: -10, max: 60, step: 0.1 }],
 			callback: async (a) => {
 				const ch = Number(a.options.inputCh) - 1
 				const db = Number(a.options.db)
@@ -514,13 +551,10 @@ export function UpdateActions(self: LV1Instance): void {
 
 		trim: {
 			name: 'Channel: Digital trim (dB)',
-			options: [
-				...trackPicker,
-				{ id: 'db', type: 'number', label: 'dB', default: 0, min: -20, max: 20, step: 0.1 },
-			],
+			options: [...trackPicker, { id: 'db', type: 'number', label: 'dB', default: 0, min: -20, max: 20, step: 0.1 }],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const db = Number(a.options.db)
 				self.send('/SetTrackTrim', [intCh(group), intCh(ch), intCh(0), { type: 'f', value: db }])
 			},
@@ -530,7 +564,16 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Channel: +48 V on/off',
 			options: [
 				...inputOpts,
-				{ id: 'state', type: 'dropdown', label: 'State', default: 'on', choices: [{ id: 'on', label: 'On' }, { id: 'off', label: 'Off' }] },
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'State',
+					default: 'on',
+					choices: [
+						{ id: 'on', label: 'On' },
+						{ id: 'off', label: 'Off' },
+					],
+				},
 			],
 			callback: async (a) => {
 				const ch = Number(a.options.inputCh) - 1
@@ -543,7 +586,16 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Channel: Polarity (phase) on/off',
 			options: [
 				...inputOpts,
-				{ id: 'state', type: 'dropdown', label: 'State', default: 'on', choices: [{ id: 'on', label: 'Inverted' }, { id: 'off', label: 'Normal' }] },
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'State',
+					default: 'on',
+					choices: [
+						{ id: 'on', label: 'Inverted' },
+						{ id: 'off', label: 'Normal' },
+					],
+				},
 			],
 			callback: async (a) => {
 				const ch = Number(a.options.inputCh) - 1
@@ -572,11 +624,20 @@ export function UpdateActions(self: LV1Instance): void {
 					],
 				},
 				...trackPicker,
-				{ id: 'state', type: 'dropdown', label: 'State', default: 'on', choices: [{ id: 'on', label: 'On' }, { id: 'off', label: 'Off' }] },
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'State',
+					default: 'on',
+					choices: [
+						{ id: 'on', label: 'On' },
+						{ id: 'off', label: 'Off' },
+					],
+				},
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const on = a.options.state === 'on' ? 1 : 0
 				const addrMap: Record<string, string> = {
 					eq: '/SetEQState',
@@ -615,7 +676,7 @@ export function UpdateActions(self: LV1Instance): void {
 			],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const band = Number(a.options.band)
 				const v = Number(a.options.value)
 				const addrMap: Record<string, string> = {
@@ -632,13 +693,10 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Misc / utilities ────────────────────────────────────────
 		rename: {
 			name: 'Channel: Rename',
-			options: [
-				...trackPicker,
-				{ id: 'name', type: 'textinput', label: 'New name', default: '' },
-			],
+			options: [...trackPicker, { id: 'name', type: 'textinput', label: 'New name', default: '' }],
 			callback: async (a) => {
 				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options as Record<string, unknown>, group)
+				const ch = resolveChannel(a.options, group)
 				const name = String(a.options.name || '')
 				if (!name) return
 				self.send('/Set/TrackName', [intCh(group), intCh(ch), { type: 's', value: name }])
@@ -692,7 +750,10 @@ export function UpdateActions(self: LV1Instance): void {
 			callback: async (a) => {
 				const addr = String(a.options.address || '')
 				if (!addr.startsWith('/')) return
-				const tokens = String(a.options.args || '').trim().split(/\s+/).filter(Boolean)
+				const tokens = String(a.options.args || '')
+					.trim()
+					.split(/\s+/)
+					.filter(Boolean)
 				const parsed: OscArg[] = []
 				for (const tok of tokens) {
 					const m = /^([ifsdhTFNI]):?(.*)$/.exec(tok)

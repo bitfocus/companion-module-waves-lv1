@@ -71,6 +71,8 @@ export class OscTcpClient extends EventEmitter {
 		this.socket = sock
 
 		sock.on('connect', () => {
+			// M4: clear the connect-deadline once the TCP handshake completes.
+			sock.setTimeout(0)
 			this.connected = true
 			this.emit('connect', { host: this.host, port: this.port })
 			// Run the handshake immediately. Caller listens for 'registered' to know when /Set/ is safe.
@@ -83,6 +85,16 @@ export class OscTcpClient extends EventEmitter {
 		})
 
 		sock.on('error', (err) => this.emit('error', err))
+
+		// M4: bound the TCP connect itself. Without this, a firewalled/silently-dropping
+		// host hangs at the OS default (tens of seconds) with status stuck Connecting.
+		sock.setTimeout(5000)
+		sock.on('timeout', () => {
+			if (!this.connected) {
+				this.emit('error', new Error(`TCP connect timed out after 5 s (${this.host}:${this.port})`))
+				sock.destroy()
+			}
+		})
 
 		sock.on('close', (hadError) => {
 			this.connected = false
@@ -154,7 +166,7 @@ export class OscTcpClient extends EventEmitter {
 	}
 
 	// Wait for the first incoming packet matching predicate. Resolves null on timeout.
-	private waitFor(predicate: (m: OscMessage) => boolean, timeoutMs: number): Promise<OscMessage | null> {
+	private async waitFor(predicate: (m: OscMessage) => boolean, timeoutMs: number): Promise<OscMessage | null> {
 		return new Promise<OscMessage | null>((resolve) => {
 			const onPacket = ({ decoded }: { decoded: OscMessage }) => {
 				try {
@@ -199,13 +211,15 @@ export class OscTcpClient extends EventEmitter {
 					},
 				])
 				const ack = await this.waitFor(
-					(p) =>
-						p?.address === '/handshake' &&
-						p.args?.[0]?.type === 'i' &&
-						(p.args[0].value as number) === 1,
+					(p) => p?.address === '/handshake' && p.args?.[0]?.type === 'i' && p.args[0].value === 1,
 					3000,
 				)
-				if (!ack) this.emit('error', new Error('No /handshake ACK after 3 s'))
+				if (!ack) {
+					// M2: no ACK means we are NOT registered. Don't fall through and emit
+					// 'registered' — that would drive Status=Ok over a half-open link.
+					this.emit('error', new Error('No /handshake ACK after 3 s'))
+					return
+				}
 				this.emit('registered', { style: 'myfoh' })
 			} else {
 				// iPhone MyMon style. MyRemote ControlPanel shows TYPE = MyMon.
@@ -221,13 +235,14 @@ export class OscTcpClient extends EventEmitter {
 					{ type: 'i', value: 0 },
 				])
 				const ack = await this.waitFor(
-					(p) =>
-						p?.address === '/handshake' &&
-						p.args?.[0]?.type === 'i' &&
-						(p.args[0].value as number) === 1,
+					(p) => p?.address === '/handshake' && p.args?.[0]?.type === 'i' && p.args[0].value === 1,
 					3000,
 				)
-				if (!ack) this.emit('error', new Error('No /handshake ACK after 3 s'))
+				if (!ack) {
+					// M2: no ACK = not registered, do not emit 'registered' or set Status=Ok.
+					this.emit('error', new Error('No /handshake ACK after 3 s'))
+					return
+				}
 				this.send('/device_name', [
 					{ type: 's', value: this.deviceName },
 					{ type: 's', value: this.uuid },
@@ -235,7 +250,7 @@ export class OscTcpClient extends EventEmitter {
 				this.emit('registered', { style: 'mymon' })
 			}
 		} catch (err) {
-			this.emit('error', err as Error)
+			this.emit('error', err)
 		}
 	}
 
