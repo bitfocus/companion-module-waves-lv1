@@ -1,4 +1,4 @@
-import { SomeCompanionConfigField, Regex } from '@companion-module/base'
+import { SomeCompanionConfigField } from '@companion-module/base'
 import { getDiscoveryCache, refreshDiscovery } from './discovery-cache.js'
 
 export interface ModuleConfig {
@@ -65,7 +65,10 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			label: 'LV1 IP (override)',
 			width: 6,
 			default: '',
-			regex: Regex.IP,
+			// Accept empty (= use auto-discovery) OR a valid dotted-quad IPv4. We can't use
+			// Regex.IP here because it rejects the empty string, which would lock the Save
+			// button whenever the user doesn't want a manual override.
+			regex: '/^$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)$/',
 		},
 		{
 			type: 'number',
