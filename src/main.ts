@@ -318,10 +318,23 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				// The earlier "sub=0, isMuted" interpretation was wrong — the third int IS
 				// the mute state, and the trailing T constant is just a validity flag.
 				// LV1 sends each event twice (~3 ms apart); idempotent so we just run twice.
+				//
+				// VERIFIED LIVE (mute-group toggle, captured 2026-06-17):
+				//   The LV1 multiplexes /Notify/MuteGroup over THIS address with the
+				//   pseudo-group g=13 — there is no separate /Notify/MuteGroup wire
+				//   format. Args become [g=13, mg_index(0..7), state(0|1), T].
+				//   Intercept that case first and route into muteGroups state.
 				const g = intArg(m, 0)
 				const ch = intArg(m, 1)
 				const state = intArg(m, 2)
 				if (g == null || ch == null || state == null) return
+				if (g === 13) {
+					const on = state !== 0
+					this.muteGroups.set(ch, on)
+					this.checkFeedbacks('muteGroup')
+					this.setVariableValues({ [`mg_${ch + 1}`]: on ? 'on' : 'off' })
+					break
+				}
 				const mute = state !== 0
 				const s = this.ensureChannel(g, ch)
 				s.muted = mute
@@ -450,42 +463,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				break
 			}
 			case '/Notify/MuteGroup': {
-				// The /Set version uses `,iT/F` but the Notify the LV1 broadcasts
-				// has never been captured byte-for-byte. Several /Notify/... family
-				// messages use ints (0/1) instead of bool tags for the same state,
-				// and most carry extra args (sub/validFlag) appended. Accept either
-				// shape: bool at any position OR int(0|1) at any position, with the
-				// group index always being the first int.
-				const grp = intArg(m, 0)
-				if (grp == null) return
-				let state: boolean | undefined
-				for (let i = 1; i < m.args.length; i++) {
-					const a = m.args[i]
-					if (a.type === 'T') {
-						state = true
-						break
-					}
-					if (a.type === 'F') {
-						state = false
-						break
-					}
-					if (a.type === 'i' && (a.value === 0 || a.value === 1)) {
-						state = a.value === 1
-						break
-					}
-				}
-				if (state == null) {
-					this.log(
-						'debug',
-						`/Notify/MuteGroup with unknown signature, args=${m.args
-							.map((a) => `${a.type}:${'value' in a ? a.value : ''}`)
-							.join(' ')}`,
-					)
-					return
-				}
-				this.muteGroups.set(grp, state)
-				this.checkFeedbacks('muteGroup')
-				this.setVariableValues({ [`mg_${grp + 1}`]: state ? 'on' : 'off' })
+				// The LV1 does NOT broadcast on this address — confirmed via mgwatch
+				// capture 2026-06-17. Real mute-group notifications come over
+				// /Notify/Track/Out/Mute with the pseudo-group g=13 (handled above).
+				// Keep the handler stub in case a future LV1 firmware adds it.
 				break
 			}
 			case '/Notify/Aux/Send/On': {
