@@ -1,6 +1,6 @@
 {
 	"name": "companion-module-waves-lv1",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"main": "dist/main.js",
 	"type": "module",
 	"scripts": {
