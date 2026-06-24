@@ -450,9 +450,39 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				break
 			}
 			case '/Notify/MuteGroup': {
-				const grp = intArg(m, 0),
-					state = boolArg(m, 1)
-				if (grp == null || state == null) return
+				// The /Set version uses `,iT/F` but the Notify the LV1 broadcasts
+				// has never been captured byte-for-byte. Several /Notify/... family
+				// messages use ints (0/1) instead of bool tags for the same state,
+				// and most carry extra args (sub/validFlag) appended. Accept either
+				// shape: bool at any position OR int(0|1) at any position, with the
+				// group index always being the first int.
+				const grp = intArg(m, 0)
+				if (grp == null) return
+				let state: boolean | undefined
+				for (let i = 1; i < m.args.length; i++) {
+					const a = m.args[i]
+					if (a.type === 'T') {
+						state = true
+						break
+					}
+					if (a.type === 'F') {
+						state = false
+						break
+					}
+					if (a.type === 'i' && (a.value === 0 || a.value === 1)) {
+						state = a.value === 1
+						break
+					}
+				}
+				if (state == null) {
+					this.log(
+						'debug',
+						`/Notify/MuteGroup with unknown signature, args=${m.args
+							.map((a) => `${a.type}:${'value' in a ? a.value : ''}`)
+							.join(' ')}`,
+					)
+					return
+				}
 				this.muteGroups.set(grp, state)
 				this.checkFeedbacks('muteGroup')
 				this.setVariableValues({ [`mg_${grp + 1}`]: state ? 'on' : 'off' })
