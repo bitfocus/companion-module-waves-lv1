@@ -4,56 +4,142 @@
 // Wire convention: ALL group/channel/aux indices are 0-based on the wire.
 // The UI uses a Group dropdown + a per-group Channel dropdown (filtered via isVisible)
 // so LR/C/M only show one entry, Auxes show real names, etc.
+//
+// Every dropdown that accepts a Group / Channel / Aux / State exposes a
+// "✎ Custom (expression)…" entry that reveals a paired textinput with
+// Companion variable support — see helpers in tracks.ts.
 
-import { CompanionActionDefinitions, CompanionInputFieldDropdown } from '@companion-module/base'
+import {
+	CompanionActionDefinitions,
+	CompanionInputFieldDropdown,
+	CompanionInputFieldTextInput,
+} from '@companion-module/base'
 import type { LV1Instance } from './main.js'
 import type { OscArg } from './osc.js'
 import { refreshDiscovery, getDiscoveryCache } from './discovery-cache.js'
-import { GROUP_CHOICES, channelsFor, buildChannelOptions, resolveChannel } from './tracks.js'
+import {
+	channelsFor,
+	buildTrackPicker,
+	buildExprDropdown,
+	buildStateField,
+	buildNumberExprField,
+	resolveTrackAsync,
+	resolveIndexAsync,
+	resolveNumberAsync,
+	resolveStateAsync,
+	CUSTOM_EXPR,
+} from './tracks.js'
+
+type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
 
 function intCh(n: number): OscArg {
 	return { type: 'i', value: n }
 }
 
 export function UpdateActions(self: LV1Instance): void {
-	// Per-group channel dropdowns (only the one matching the selected group is visible).
-	const trackOpts = buildChannelOptions(self, 'ch') as CompanionInputFieldDropdown[]
-	// For sends/preamp/etc. we want a SECOND set of dropdowns scoped to the input channel.
-	const inputOpts: CompanionInputFieldDropdown[] = [
-		{ id: 'inputCh', type: 'dropdown', label: 'Input channel', default: 1, choices: channelsFor(self, 0) },
-	]
-	const auxDestOpts: CompanionInputFieldDropdown[] = [
-		{ id: 'aux', type: 'dropdown', label: 'Aux destination', default: 1, choices: channelsFor(self, 2) },
-	]
+	const trackPicker: AnyOpt[] = buildTrackPicker(self, 'ch')
+	const inputOpts: AnyOpt[] = buildExprDropdown(
+		'inputCh',
+		'Input channel',
+		channelsFor(self, 0),
+		'1-based input channel index.',
+	)
+	const auxDestOpts: AnyOpt[] = buildExprDropdown(
+		'aux',
+		'Aux destination',
+		channelsFor(self, 2),
+		'1-based aux/FX destination index.',
+	)
 
-	const trackPicker: CompanionInputFieldDropdown[] = [
-		{ id: 'group', type: 'dropdown', label: 'Group', default: 0, choices: GROUP_CHOICES },
-		...trackOpts,
-	]
+	const muteState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Mute' },
+			{ id: 'off', label: 'Unmute' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const soloState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Solo' },
+			{ id: 'off', label: 'Unsolo' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const sendState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Send on' },
+			{ id: 'off', label: 'Send off' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const spillState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Spill on' },
+			{ id: 'off', label: 'Spill off' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const tbState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'On (engage TB to this output)' },
+			{ id: 'off', label: 'Off (cut TB to this output)' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const muteGroupState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Mute (on)' },
+			{ id: 'off', label: 'Unmute (off)' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const onOffState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'On' },
+			{ id: 'off', label: 'Off' },
+		],
+		'on',
+	)
+	const phaseState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Inverted' },
+			{ id: 'off', label: 'Normal' },
+		],
+		'on',
+	)
+
+	const dbField = (id = 'db', label = 'dB', def = 0) =>
+		buildNumberExprField(id, label, def, 'dB value: −144..+10 (−144 = mute, 0 = unity). Variables OK.')
+	const panField = (id = 'value', label = 'Pan (−1 = full L, +1 = full R)', def = 0) =>
+		buildNumberExprField(id, label, def, 'Pan value −1..+1. Variables OK.')
+	const widthField = (id = 'value', label = 'Width (0 = mono, 1 = full stereo)', def = 1) =>
+		buildNumberExprField(id, label, def, 'Width value 0..1. Variables OK.')
+	const msField = (id = 'duration', label = 'Duration (ms)', def = 1000) =>
+		buildNumberExprField(id, label, def, 'Duration in milliseconds. Variables OK.')
 
 	const actions: CompanionActionDefinitions = {
 		// ─── Mute / Solo ──────────────────────────────────────────────
 		mute: {
 			name: 'Channel: Mute / Unmute / Toggle',
-			options: [
-				...trackPicker,
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'toggle',
-					choices: [
-						{ id: 'on', label: 'Mute' },
-						{ id: 'off', label: 'Unmute' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
+			options: [...trackPicker, ...muteState],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
 				const cur = self.channels.get(`${group}.${ch}`)?.muted ?? false
-				const mode = String(a.options.state)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
 				self.log('debug', `mute g=${group} ch=${ch} mode=${mode} cur=${cur} → ${desired}`)
 				// Optimistic first so a rapid double-press inverts the new state, not the old one.
@@ -64,25 +150,11 @@ export function UpdateActions(self: LV1Instance): void {
 
 		solo: {
 			name: 'Channel: Solo / Unsolo / Toggle',
-			options: [
-				...trackPicker,
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'toggle',
-					choices: [
-						{ id: 'on', label: 'Solo' },
-						{ id: 'off', label: 'Unsolo' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
+			options: [...trackPicker, ...soloState],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
 				const cur = self.channels.get(`${group}.${ch}`)?.solo ?? false
-				const mode = String(a.options.state)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
 				self.applyChannelDelta(group, ch, { solo: desired })
 				self.send('/Set/Solo', [intCh(group), intCh(ch), intCh(desired ? 1 : 0)])
@@ -92,22 +164,10 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Channel faders ──────────────────────────────────────────
 		outGain: {
 			name: 'Channel: Set output fader (dB)',
-			options: [
-				...trackPicker,
-				{
-					id: 'db',
-					type: 'number',
-					label: 'dB (−144 = mute, 0 = unity, +10 = max)',
-					default: 0,
-					min: -144,
-					max: 10,
-					step: 0.1,
-				},
-			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const db = Number(a.options.db)
+			options: [...trackPicker, dbField('db', 'dB (−144 = mute, 0 = unity, +10 = max)', 0)],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const db = await resolveNumberAsync(a.options, 'db', context, 0)
 				self.applyChannelDelta(group, ch, { gain: db })
 				self.send('/Set/Track/Out/Gain', [intCh(group), intCh(ch), { type: 'd', value: db }])
 			},
@@ -115,22 +175,10 @@ export function UpdateActions(self: LV1Instance): void {
 
 		pan: {
 			name: 'Channel: Pan',
-			options: [
-				...trackPicker,
-				{
-					id: 'value',
-					type: 'number',
-					label: 'Pan (−1 = full L, +1 = full R)',
-					default: 0,
-					min: -1,
-					max: 1,
-					step: 0.05,
-				},
-			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const v = Number(a.options.value)
+			options: [...trackPicker, panField()],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const v = await resolveNumberAsync(a.options, 'value', context, 0)
 				self.applyChannelDelta(group, ch, { pan: v })
 				self.send('/Set/Track/Pan', [intCh(group), intCh(ch), { type: 'd', value: v }])
 			},
@@ -138,22 +186,10 @@ export function UpdateActions(self: LV1Instance): void {
 
 		width: {
 			name: 'Channel: Stereo width',
-			options: [
-				...trackPicker,
-				{
-					id: 'value',
-					type: 'number',
-					label: 'Width (0 = mono, 1 = full stereo)',
-					default: 1,
-					min: 0,
-					max: 1,
-					step: 0.05,
-				},
-			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const v = Number(a.options.value)
+			options: [...trackPicker, widthField()],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const v = await resolveNumberAsync(a.options, 'value', context, 1)
 				self.applyChannelDelta(group, ch, { width: v })
 				self.send('/Set/Track/Pan/Width', [intCh(group), intCh(ch), { type: 'd', value: v }])
 			},
@@ -162,26 +198,12 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Sends from inputs to auxes ──────────────────────────────
 		sendOn: {
 			name: 'Send: On / Off / Toggle',
-			options: [
-				...inputOpts,
-				...auxDestOpts,
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'toggle',
-					choices: [
-						{ id: 'on', label: 'Send on' },
-						{ id: 'off', label: 'Send off' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const ch = Number(a.options.inputCh) - 1
-				const aux = Number(a.options.aux) - 1
+			options: [...inputOpts, ...auxDestOpts, ...sendState],
+			callback: async (a, context) => {
+				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+				const aux = await resolveIndexAsync(a.options, 'aux', context, 0)
 				const cur = self.sends.get(`0.${ch}.${aux}`)?.on ?? false
-				const mode = String(a.options.state)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
 				self.applySendDelta(0, ch, aux, { on: desired })
 				self.send('/Set/Aux/Send/On', [intCh(0), intCh(ch), intCh(aux), { type: desired ? 'T' : 'F' }])
@@ -190,15 +212,11 @@ export function UpdateActions(self: LV1Instance): void {
 
 		sendGain: {
 			name: 'Send: Set fader (dB)',
-			options: [
-				...inputOpts,
-				...auxDestOpts,
-				{ id: 'db', type: 'number', label: 'dB', default: -10, min: -144, max: 10, step: 0.1 },
-			],
-			callback: async (a) => {
-				const ch = Number(a.options.inputCh) - 1
-				const aux = Number(a.options.aux) - 1
-				const db = Number(a.options.db)
+			options: [...inputOpts, ...auxDestOpts, dbField('db', 'dB', -10)],
+			callback: async (a, context) => {
+				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+				const aux = await resolveIndexAsync(a.options, 'aux', context, 0)
+				const db = await resolveNumberAsync(a.options, 'db', context, -10)
 				self.applySendDelta(0, ch, aux, { gain: db })
 				self.send('/Set/Aux/Send/Gain', [intCh(0), intCh(ch), intCh(aux), { type: 'd', value: db }])
 			},
@@ -219,56 +237,79 @@ export function UpdateActions(self: LV1Instance): void {
 					],
 				},
 				// ───── Channel-output mode: Group + per-group Channel picker ─────
-				{
-					id: 'group',
-					type: 'dropdown',
-					label: 'Group',
-					default: 0,
-					choices: GROUP_CHOICES,
-					isVisible: (opts: Record<string, unknown>) => opts.target === 'out',
-				},
-				// Per-group channel dropdowns — visible only when target='out' AND group matches.
-				...trackOpts.map((o) => ({
-					...o,
-					isVisible: (opts: Record<string, unknown>, data: { group: number }) =>
-						opts.target === 'out' && Number(opts.group) === data.group,
-				})),
+				...trackPicker.map((o) => {
+					const prevVis = (o as CompanionInputFieldDropdown).isVisible as
+						| ((opts: Record<string, unknown>, data: unknown) => boolean)
+						| undefined
+					const prevData = (o as CompanionInputFieldDropdown).isVisibleData as unknown
+					if (prevVis) {
+						return {
+							...o,
+							isVisible: (opts: Record<string, unknown>, data: { inner: unknown }) =>
+								opts.target === 'out' && prevVis(opts, data.inner),
+							isVisibleData: { inner: prevData },
+						}
+					}
+					return {
+						...o,
+						isVisible: (opts: Record<string, unknown>) => opts.target === 'out',
+					}
+				}),
 				// ───── Send mode: Input ch + Aux ─────
-				{
-					id: 'inputCh',
-					type: 'dropdown',
-					label: 'Input channel',
-					default: 1,
-					choices: channelsFor(self, 0),
-					isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
-				},
-				{
-					id: 'aux',
-					type: 'dropdown',
-					label: 'Aux destination',
-					default: 1,
-					choices: channelsFor(self, 2),
-					isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
-				},
+				...inputOpts.map((o) => {
+					const prevVis = (o as CompanionInputFieldDropdown).isVisible as
+						| ((opts: Record<string, unknown>, data: unknown) => boolean)
+						| undefined
+					const prevData = (o as CompanionInputFieldDropdown).isVisibleData as unknown
+					if (prevVis) {
+						return {
+							...o,
+							isVisible: (opts: Record<string, unknown>, data: { inner: unknown }) =>
+								opts.target === 'send' && prevVis(opts, data.inner),
+							isVisibleData: { inner: prevData },
+						}
+					}
+					return {
+						...o,
+						isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
+					}
+				}),
+				...auxDestOpts.map((o) => {
+					const prevVis = (o as CompanionInputFieldDropdown).isVisible as
+						| ((opts: Record<string, unknown>, data: unknown) => boolean)
+						| undefined
+					const prevData = (o as CompanionInputFieldDropdown).isVisibleData as unknown
+					if (prevVis) {
+						return {
+							...o,
+							isVisible: (opts: Record<string, unknown>, data: { inner: unknown }) =>
+								opts.target === 'send' && prevVis(opts, data.inner),
+							isVisibleData: { inner: prevData },
+						}
+					}
+					return {
+						...o,
+						isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
+					}
+				}),
 				// ───── Common ─────
-				{ id: 'db', type: 'number', label: 'Target dB', default: 0, min: -144, max: 10, step: 0.1 },
-				{ id: 'duration', type: 'number', label: 'Duration (ms)', default: 1000, min: 0, max: 60000, step: 100 },
+				dbField('db', 'Target dB', 0),
+				msField(),
 			],
-			callback: async (a) => {
+			callback: async (a, context) => {
 				const target = String(a.options.target)
-				const targetDb = Number(a.options.db)
-				const durationMs = Number(a.options.duration)
+				const targetDb = await resolveNumberAsync(a.options, 'db', context, 0)
+				const durationMs = await resolveNumberAsync(a.options, 'duration', context, 1000)
 				if (target === 'out') {
-					const group = Number(a.options.group)
-					const ch = resolveChannel(a.options, group)
+					const { group, ch } = await resolveTrackAsync(a.options, context)
 					const currentDb = self.channels.get(`${group}.${ch}`)?.gain ?? 0
 					self.startFade(`out_${group}.${ch}`, currentDb, targetDb, durationMs, (db) => {
 						self.applyChannelDelta(group, ch, { gain: db })
 						self.send('/Set/Track/Out/Gain', [intCh(group), intCh(ch), { type: 'd', value: db }])
 					})
 				} else {
-					const ch = Number(a.options.inputCh) - 1
-					const aux = Number(a.options.aux) - 1
+					const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+					const aux = await resolveIndexAsync(a.options, 'aux', context, 0)
 					const currentDb = self.sends.get(`0.${ch}.${aux}`)?.gain ?? -144
 					self.startFade(`send_0.${ch}.${aux}`, currentDb, targetDb, durationMs, (db) => {
 						self.applySendDelta(0, ch, aux, { gain: db })
@@ -280,15 +321,11 @@ export function UpdateActions(self: LV1Instance): void {
 
 		sendPan: {
 			name: 'Send: Pan',
-			options: [
-				...inputOpts,
-				...auxDestOpts,
-				{ id: 'value', type: 'number', label: 'Pan (−1..+1)', default: 0, min: -1, max: 1, step: 0.05 },
-			],
-			callback: async (a) => {
-				const ch = Number(a.options.inputCh) - 1
-				const aux = Number(a.options.aux) - 1
-				const v = Number(a.options.value)
+			options: [...inputOpts, ...auxDestOpts, panField('value', 'Pan (−1..+1)', 0)],
+			callback: async (a, context) => {
+				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+				const aux = await resolveIndexAsync(a.options, 'aux', context, 0)
+				const v = await resolveNumberAsync(a.options, 'value', context, 0)
 				self.send('/Set/Aux/Send/Pan', [intCh(0), intCh(ch), intCh(aux), { type: 'd', value: v }])
 			},
 		},
@@ -303,7 +340,7 @@ export function UpdateActions(self: LV1Instance): void {
 					label: 'Flip Sends user key',
 					default: -1,
 					choices: (() => {
-						const c: { id: number; label: string }[] = []
+						const c: { id: number | string; label: string }[] = []
 						for (const [idx, uk] of self.userKeys) {
 							if (uk.assigned && uk.func.startsWith('Flip Sends')) {
 								c.push({ id: idx, label: `UK ${idx + 1}: ${uk.func}` })
@@ -332,25 +369,15 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'Spill: Press a Spill button (expand group/DCA on faders)',
 			description: 'Expands a group/DCA onto the channel faders.',
 			options: [
-				{ id: 'bank', type: 'number', label: 'Bank (0 = Mixer 1, 1 = Mixer 2)', default: 0, min: 0, max: 1 },
-				{ id: 'idx', type: 'number', label: 'Slot (0-based)', default: 0, min: 0, max: 31 },
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'toggle',
-					choices: [
-						{ id: 'on', label: 'Spill on' },
-						{ id: 'off', label: 'Spill off' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
+				buildNumberExprField('bank', 'Bank (0 = Mixer 1, 1 = Mixer 2)', 0, '0 or 1. Variables OK.'),
+				buildNumberExprField('idx', 'Slot (0-based)', 0, '0..31. Variables OK.'),
+				...spillState,
 			],
-			callback: async (a) => {
-				const bank = Number(a.options.bank)
-				const idx = Number(a.options.idx)
+			callback: async (a, context) => {
+				const bank = Math.round(await resolveNumberAsync(a.options, 'bank', context, 0))
+				const idx = Math.round(await resolveNumberAsync(a.options, 'idx', context, 0))
 				const cur = self.spillStates.get(`${bank}.${idx}`) ?? false
-				const mode = String(a.options.state)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
 				self.send('/Set/SpillButton', [intCh(bank), intCh(idx), intCh(desired ? 1 : 0)])
 				// Optimistic update
@@ -362,23 +389,10 @@ export function UpdateActions(self: LV1Instance): void {
 		talkBackToOutput: {
 			name: 'Talk Back: Engage to output',
 			description: 'Sends TalkBack mic to the chosen output.',
-			options: [
-				{ id: 'aux', type: 'dropdown', label: 'Output', default: 1, choices: channelsFor(self, 2) },
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'Action',
-					default: 'toggle',
-					choices: [
-						{ id: 'on', label: 'On (engage TB to this output)' },
-						{ id: 'off', label: 'Off (cut TB to this output)' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const aux = Number(a.options.aux) - 1
-				const mode = String(a.options.state)
+			options: [...buildExprDropdown('aux', 'Output', channelsFor(self, 2), '1-based output/aux index.'), ...tbState],
+			callback: async (a, context) => {
+				const aux = await resolveIndexAsync(a.options, 'aux', context, 0)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
 				const wasActive = self.tbDestEnabled.get(aux) ?? false
 				const engage = mode === 'on' ? true : mode === 'off' ? false : !wasActive
 				const targetDb = engage ? 0 : -144
@@ -402,18 +416,23 @@ export function UpdateActions(self: LV1Instance): void {
 
 		auxSelect: {
 			name: 'Aux: Focus (MyMon view)',
-			options: [
-				{
-					id: 'aux',
-					type: 'dropdown',
-					label: 'Aux to focus (0 = none)',
-					default: 0,
-					choices: [{ id: 0, label: 'None' }, ...channelsFor(self, 2)],
-				},
-			],
-			callback: async (a) => {
-				const aux = Number(a.options.aux)
-				const wire = aux === 0 ? -1 : aux - 1
+			options: buildExprDropdown(
+				'aux',
+				'Aux to focus (0 = none)',
+				[{ id: 0, label: 'None' }, ...channelsFor(self, 2)],
+				'0 = none, else 1-based aux.',
+				0,
+			),
+			callback: async (a, context) => {
+				// Note: this dropdown is special — value 0 = "None" (wire=-1), value N = aux #N.
+				const raw = a.options.aux
+				let uiVal: number
+				if (raw === CUSTOM_EXPR) {
+					uiVal = await resolveNumberAsync(a.options, 'aux_expr', context, 0)
+				} else {
+					uiVal = Number(raw)
+				}
+				const wire = uiVal === 0 ? -1 : uiVal - 1
 				self.send('/Set/AuxId', [intCh(wire)])
 			},
 		},
@@ -421,24 +440,11 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Mute groups + user keys + scenes ───────────────────────
 		muteGroup: {
 			name: 'Mute Group: On / Off / Toggle',
-			options: [
-				{ id: 'group', type: 'number', label: 'Mute Group (1-8)', default: 1, min: 1, max: 8 },
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'toggle',
-					choices: [
-						{ id: 'on', label: 'Mute (on)' },
-						{ id: 'off', label: 'Unmute (off)' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const grp = Number(a.options.group) - 1
+			options: [buildNumberExprField('group', 'Mute Group (1-8)', 1, '1..8. Variables OK.'), ...muteGroupState],
+			callback: async (a, context) => {
+				const grp = Math.round(await resolveNumberAsync(a.options, 'group', context, 1)) - 1
 				const cur = self.muteGroups.get(grp) ?? false
-				const mode = String(a.options.state)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
 				const desired = mode === 'on' ? true : mode === 'off' ? false : !cur
 				self.applyMuteGroup(grp, desired)
 				self.send('/Set/MuteGroup', [intCh(grp), { type: desired ? 'T' : 'F' }])
@@ -448,58 +454,69 @@ export function UpdateActions(self: LV1Instance): void {
 		userKey: {
 			name: 'User Key: Press (momentary) or Hold',
 			options: [
-				{ id: 'key', type: 'number', label: 'User Key (1-16)', default: 1, min: 1, max: 16 },
-				{
-					id: 'mode',
-					type: 'dropdown',
-					label: 'Mode',
-					default: 'momentary',
-					choices: [
+				buildNumberExprField('key', 'User Key (1-16)', 1, '1..16. Variables OK.'),
+				...buildStateField(
+					'mode',
+					[
 						{ id: 'momentary', label: 'Momentary press (down + up)' },
 						{ id: 'on', label: 'Force ON' },
 						{ id: 'off', label: 'Force OFF' },
 					],
-				},
+					'momentary',
+				),
 			],
-			callback: async (a) => {
-				const k = Number(a.options.key) - 1
-				const mode = String(a.options.mode)
-				if (mode === 'momentary') {
+			callback: async (a, context) => {
+				const k = Math.round(await resolveNumberAsync(a.options, 'key', context, 1)) - 1
+				// resolveStateAsync only understands on/off/toggle; for 'momentary' we
+				// need the raw dropdown value or the trimmed expression string.
+				let mode: string
+				if (a.options.mode === CUSTOM_EXPR) {
+					mode = (await context.parseVariablesInString(String(a.options.mode_expr ?? ''))).trim().toLowerCase()
+				} else {
+					mode = String(a.options.mode)
+				}
+				if (mode === 'momentary' || mode === '' || mode === 'press' || mode === 'tap') {
 					self.send('/Set/UserKey', [intCh(k), { type: 'T' }])
 					self.send('/Set/UserKey', [intCh(k), { type: 'F' }])
 				} else {
-					self.send('/Set/UserKey', [intCh(k), { type: mode === 'on' ? 'T' : 'F' }])
+					const on = ['1', 'true', 'on'].includes(mode)
+					self.send('/Set/UserKey', [intCh(k), { type: on ? 'T' : 'F' }])
 				}
 			},
 		},
 
 		sceneRecall: {
 			name: 'Scene: Recall by index',
-			options: [{ id: 'scene', type: 'number', label: 'Scene index (0-based)', default: 0, min: 0, max: 999 }],
-			callback: async (a) => {
-				self.send('/Set/CurSceneIndex', [intCh(Number(a.options.scene))])
+			options: [buildNumberExprField('scene', 'Scene index (0-based)', 0, '0..999. Variables OK.')],
+			callback: async (a, context) => {
+				const idx = Math.round(await resolveNumberAsync(a.options, 'scene', context, 0))
+				self.send('/Set/CurSceneIndex', [intCh(idx)])
 			},
 		},
 
 		sceneRecallByName: {
 			name: 'Scene: Recall (pick from list)',
 			description: 'Pick a scene from the list.',
-			options: [
-				{
-					id: 'scene',
-					type: 'dropdown',
-					label: 'Scene',
-					default: 0,
-					choices:
-						self.scenes.size > 0
-							? [...self.scenes.entries()]
-									.sort(([a], [b]) => a - b)
-									.map(([idx, name]) => ({ id: idx, label: `${idx + 1} — ${name}` }))
-							: [{ id: 0, label: '(no scenes detected yet — connect and wait for /Notify/SceneList)' }],
-				},
-			],
-			callback: async (a) => {
-				self.send('/Set/CurSceneIndex', [intCh(Number(a.options.scene))])
+			options: buildExprDropdown(
+				'scene',
+				'Scene',
+				self.scenes.size > 0
+					? [...self.scenes.entries()]
+							.sort(([a], [b]) => a - b)
+							.map(([idx, name]) => ({ id: idx, label: `${idx + 1} — ${name}` }))
+					: [{ id: 0, label: '(no scenes detected yet — connect and wait for /Notify/SceneList)' }],
+				'0-based scene index.',
+				0,
+			),
+			callback: async (a, context) => {
+				const raw = a.options.scene
+				let idx: number
+				if (raw === CUSTOM_EXPR) {
+					idx = Math.round(await resolveNumberAsync(a.options, 'scene_expr', context, 0))
+				} else {
+					idx = Number(raw)
+				}
+				self.send('/Set/CurSceneIndex', [intCh(idx)])
 			},
 		},
 
@@ -541,65 +558,42 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Preamp + plugin enables (input channels only) ───────────
 		inGain: {
 			name: 'Preamp: Set input gain (dB)',
-			options: [...inputOpts, { id: 'db', type: 'number', label: 'dB', default: 20, min: -10, max: 60, step: 0.1 }],
-			callback: async (a) => {
-				const ch = Number(a.options.inputCh) - 1
-				const db = Number(a.options.db)
+			options: [...inputOpts, dbField('db', 'dB', 20)],
+			callback: async (a, context) => {
+				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+				const db = await resolveNumberAsync(a.options, 'db', context, 20)
 				self.send('/SetTrackInGain', [intCh(0), intCh(ch), intCh(0), { type: 'f', value: db }])
 			},
 		},
 
 		trim: {
 			name: 'Channel: Digital trim (dB)',
-			options: [...trackPicker, { id: 'db', type: 'number', label: 'dB', default: 0, min: -20, max: 20, step: 0.1 }],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const db = Number(a.options.db)
+			options: [...trackPicker, dbField('db', 'dB', 0)],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const db = await resolveNumberAsync(a.options, 'db', context, 0)
 				self.send('/SetTrackTrim', [intCh(group), intCh(ch), intCh(0), { type: 'f', value: db }])
 			},
 		},
 
 		phantom: {
 			name: 'Channel: +48 V on/off',
-			options: [
-				...inputOpts,
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'on',
-					choices: [
-						{ id: 'on', label: 'On' },
-						{ id: 'off', label: 'Off' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const ch = Number(a.options.inputCh) - 1
-				const on = a.options.state === 'on' ? 1 : 0
+			options: [...inputOpts, ...onOffState],
+			callback: async (a, context) => {
+				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'on')
+				const on = mode === 'on' ? 1 : 0
 				self.send('/SetTrackPhantomState', [intCh(0), intCh(ch), intCh(0), intCh(on)])
 			},
 		},
 
 		polarity: {
 			name: 'Channel: Polarity (phase) on/off',
-			options: [
-				...inputOpts,
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'on',
-					choices: [
-						{ id: 'on', label: 'Inverted' },
-						{ id: 'off', label: 'Normal' },
-					],
-				},
-			],
-			callback: async (a) => {
-				const ch = Number(a.options.inputCh) - 1
-				const on = a.options.state === 'on' ? 1 : 0
+			options: [...inputOpts, ...phaseState],
+			callback: async (a, context) => {
+				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'on')
+				const on = mode === 'on' ? 1 : 0
 				self.send('/SetTrackPhaseState', [intCh(0), intCh(ch), intCh(0), intCh(on)])
 			},
 		},
@@ -624,21 +618,12 @@ export function UpdateActions(self: LV1Instance): void {
 					],
 				},
 				...trackPicker,
-				{
-					id: 'state',
-					type: 'dropdown',
-					label: 'State',
-					default: 'on',
-					choices: [
-						{ id: 'on', label: 'On' },
-						{ id: 'off', label: 'Off' },
-					],
-				},
+				...onOffState,
 			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const on = a.options.state === 'on' ? 1 : 0
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'on')
+				const on = mode === 'on' ? 1 : 0
 				const addrMap: Record<string, string> = {
 					eq: '/SetEQState',
 					filter: '/SetFilterState',
@@ -660,7 +645,7 @@ export function UpdateActions(self: LV1Instance): void {
 			name: 'EQ: Set band (Freq / Gain / Q)',
 			options: [
 				...trackPicker,
-				{ id: 'band', type: 'number', label: 'Band (1-based)', default: 1, min: 1, max: 6 },
+				buildNumberExprField('band', 'Band (1-based)', 1, '1..6. Variables OK.'),
 				{
 					id: 'param',
 					type: 'dropdown',
@@ -672,13 +657,12 @@ export function UpdateActions(self: LV1Instance): void {
 						{ id: 'q', label: 'Q' },
 					],
 				},
-				{ id: 'value', type: 'number', label: 'Value', default: 0, min: -100, max: 22000, step: 0.1 },
+				buildNumberExprField('value', 'Value', 0, 'Hz / dB / Q depending on Parameter. Variables OK.'),
 			],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const band = Number(a.options.band)
-				const v = Number(a.options.value)
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const band = Math.round(await resolveNumberAsync(a.options, 'band', context, 1))
+				const v = await resolveNumberAsync(a.options, 'value', context, 0)
 				const addrMap: Record<string, string> = {
 					freq: '/Set/EQ/Band/Freq',
 					gain: '/Set/EQ/Band/Gain',
@@ -693,11 +677,11 @@ export function UpdateActions(self: LV1Instance): void {
 		// ─── Misc / utilities ────────────────────────────────────────
 		rename: {
 			name: 'Channel: Rename',
-			options: [...trackPicker, { id: 'name', type: 'textinput', label: 'New name', default: '' }],
-			callback: async (a) => {
-				const group = Number(a.options.group)
-				const ch = resolveChannel(a.options, group)
-				const name = String(a.options.name || '')
+			options: [...trackPicker, { id: 'name', type: 'textinput', label: 'New name', default: '', useVariables: true }],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const nameRaw = String(a.options.name || '')
+				const name = (await context.parseVariablesInString(nameRaw)).trim()
 				if (!name) return
 				self.send('/Set/TrackName', [intCh(group), intCh(ch), { type: 's', value: name }])
 				// Optimistic — our own /Set isn't echoed back, so update local state too.
@@ -739,21 +723,26 @@ export function UpdateActions(self: LV1Instance): void {
 		rawOsc: {
 			name: 'Raw: Send any OSC address',
 			options: [
-				{ id: 'address', type: 'textinput', label: 'OSC address (e.g. /Set/Track/Out/Mute)', default: '' },
+				{
+					id: 'address',
+					type: 'textinput',
+					label: 'OSC address (e.g. /Set/Track/Out/Mute)',
+					default: '',
+					useVariables: true,
+				},
 				{
 					id: 'args',
 					type: 'textinput',
 					label: 'Args (whitespace-separated, prefix with type — e.g. "i:0 i:1 T")',
 					default: '',
+					useVariables: true,
 				},
 			],
-			callback: async (a) => {
-				const addr = String(a.options.address || '')
+			callback: async (a, context) => {
+				const addr = (await context.parseVariablesInString(String(a.options.address || ''))).trim()
 				if (!addr.startsWith('/')) return
-				const tokens = String(a.options.args || '')
-					.trim()
-					.split(/\s+/)
-					.filter(Boolean)
+				const argsStr = await context.parseVariablesInString(String(a.options.args || ''))
+				const tokens = argsStr.trim().split(/\s+/).filter(Boolean)
 				const parsed: OscArg[] = []
 				for (const tok of tokens) {
 					const m = /^([ifsdhTFNI]):?(.*)$/.exec(tok)

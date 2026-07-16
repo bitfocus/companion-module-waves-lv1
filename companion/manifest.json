@@ -5,7 +5,7 @@
 	"name": "waves-lv1",
 	"shortname": "LV1",
 	"description": "Control Waves LV1 digital mixer over its native OSC-over-TCP protocol. Auto-discovery via Waves zDNS multicast, full /Set/ vocabulary, live feedbacks, channel-name dropdowns, fade ramping, scene recall by name.",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"license": "MIT",
 	"repository": "git+https://github.com/miglourenco/companion-module-waves-lv1.git",
 	"bugs": "https://github.com/miglourenco/companion-module-waves-lv1/issues",
