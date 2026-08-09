@@ -26,6 +26,8 @@ export function UpdateVariables(self: LV1Instance): void {
 		defs.push({ variableId: `${slug}_vu`, name: `${label} — VU meter, L/mono (dB, ~0.8 Hz)` })
 		defs.push({ variableId: `${slug}_vu_r`, name: `${label} — VU meter, R of stereo (dB)` })
 		defs.push({ variableId: `${slug}_color`, name: `${label} — color (#RRGGBB)` })
+		defs.push({ variableId: `${slug}_polarity`, name: `${label} — polarity/phase (on/off, blank = unknown)` })
+		defs.push({ variableId: `${slug}_phantom`, name: `${label} — +48 V phantom (on/off, blank = unknown)` })
 	}
 
 	// Globals.
@@ -78,6 +80,9 @@ export function pushAll(self: LV1Instance): void {
 		values[`${slug}_pan`] = s?.pan != null ? s.pan.toFixed(2) : ''
 		values[`${slug}_width`] = s?.width != null ? s.width.toFixed(2) : ''
 		values[`${slug}_color`] = s?.color ? toHex(s.color) : ''
+		// Blank, NOT 'off', when the console has not told us. See ChannelState.phantom.
+		values[`${slug}_polarity`] = s?.polarity == null ? '' : s.polarity ? 'on' : 'off'
+		values[`${slug}_phantom`] = s?.phantom == null ? '' : s.phantom ? 'on' : 'off'
 		const vuL = self.meters.get(`${group}.${ch}.0`)
 		const vuR = self.meters.get(`${group}.${ch}.1`)
 		values[`${slug}_vu`] = vuL != null ? vuL.toFixed(1) : ''
@@ -122,7 +127,7 @@ export function pushTrack(
 	self: LV1Instance,
 	group: number,
 	ch: number,
-	prop: 'mute' | 'solo' | 'gain' | 'pan' | 'width' | 'name' | 'color',
+	prop: 'mute' | 'solo' | 'gain' | 'pan' | 'width' | 'name' | 'color' | 'polarity' | 'phantom',
 ): void {
 	const slug = trackSlug(group, ch)
 	const s = self.channels.get(`${group}.${ch}`)
@@ -135,6 +140,8 @@ export function pushTrack(
 	if (prop === 'width') v[`${slug}_width`] = s.width != null ? s.width.toFixed(2) : ''
 	if (prop === 'name') v[`${slug}_name`] = s.name ?? ''
 	if (prop === 'color') v[`${slug}_color`] = s.color ? toHex(s.color) : ''
+	if (prop === 'polarity') v[`${slug}_polarity`] = s.polarity == null ? '' : s.polarity ? 'on' : 'off'
+	if (prop === 'phantom') v[`${slug}_phantom`] = s.phantom == null ? '' : s.phantom ? 'on' : 'off'
 	self.setVariableValues(v)
 }
 
