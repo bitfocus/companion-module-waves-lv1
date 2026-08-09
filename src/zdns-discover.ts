@@ -90,8 +90,28 @@ function parseZDNS(buf: Buffer): ZDNSParsed | null {
 	return { service, uuid, host, port, ipv4s, ipv6s }
 }
 
+/** The non-internal IPv4 interfaces a scan will join the multicast group on.
+ *  Exported so the config dialog can NAME them: when discovery finds nothing,
+ *  the operator's only real question is whether we are even listening on the
+ *  cable the desk is patched into. "Scanning…" does not answer that. */
+export function multicastInterfaces(): { name: string; address: string }[] {
+	const out: { name: string; address: string }[] = []
+	for (const [name, list] of Object.entries(os.networkInterfaces())) {
+		if (!list) continue
+		for (const iface of list) {
+			if (iface.family !== 'IPv4' || iface.internal) continue
+			out.push({ name, address: iface.address })
+		}
+	}
+	return out
+}
+
 export interface DiscoverOptions {
 	timeoutMs?: number
+	/** Progress / failure reporting. Without this a bind failure is invisible:
+	 *  the scan just returns zero entries and looks identical to "no LV1 on the
+	 *  LAN", which is the single hardest thing to debug about this module. */
+	onDiagnostic?: (level: 'info' | 'warn' | 'error', message: string) => void
 	/** If set, only return entries whose host IP list contains this IP. Used when the user
 	 *  knows the LV1's IP but not its (session-varying) port. */
 	filterHostIp?: string
@@ -145,15 +165,35 @@ export function discover(opts: DiscoverOptions = {}): DiscoverHandle {
 		resolveFn([...found.values()])
 	}
 
+	const diag = opts.onDiagnostic ?? (() => {})
+
 	try {
 		socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
-	} catch {
+	} catch (err) {
 		// dgram construction can throw on hardened platforms — resolve empty
+		diag('error', `Discovery socket could not be created: ${(err as Error).message}`)
 		queueMicrotask(finish)
 		return { stop: finish, done }
 	}
 
-	socket.on('error', () => finish())
+	socket.on('error', (err: NodeJS.ErrnoException) => {
+		// ⛔ This used to be `() => finish()`. A silent failure here is
+		// indistinguishable from "no LV1 on the network" — the scan returns zero
+		// entries either way. EADDRINUSE in particular means something else already
+		// holds UDP 13337 (a second Companion, a Waves tool, another LV1 utility),
+		// which is a fixable problem the operator can only fix if they are told.
+		const code = err.code ?? err.message
+		if (code === 'EADDRINUSE') {
+			diag(
+				'error',
+				`Discovery cannot listen on UDP ${MCAST_PORT}: another process on this machine already holds it (EADDRINUSE). ` +
+					`Close any other LV1 tool or duplicate Companion instance, or set the LV1 IP manually to skip discovery.`,
+			)
+		} else {
+			diag('error', `Discovery socket error (${code}) — treating as no LV1 found.`)
+		}
+		finish()
+	})
 
 	socket.on('message', (buf, rinfo) => {
 		const z = parseZDNS(buf)
@@ -186,26 +226,41 @@ export function discover(opts: DiscoverOptions = {}): DiscoverHandle {
 		}
 		// Join the multicast group on every non-internal IPv4 interface so we
 		// catch the announcement regardless of which NIC the LV1 lives on.
-		const ifaces = os.networkInterfaces()
-		let joinedAny = false
-		for (const list of Object.values(ifaces)) {
-			if (!list) continue
-			for (const iface of list) {
-				if (iface.family !== 'IPv4' || iface.internal) continue
-				try {
-					socket.addMembership(MCAST_ADDR, iface.address)
-					joinedAny = true
-				} catch {
-					/* some Windows ifaces refuse multicast — ignore */
-				}
+		//
+		// One socket with N memberships is the correct shape here, and it matters:
+		// the LV1 beacons out EVERY interface it has, but a listener that joins
+		// only the default route hears just one of them. On a FOH machine whose
+		// Wi-Fi carries the internet (and the default route) while Ethernet carries
+		// the desk, joining only the default would hear nothing, forever.
+		const joined: string[] = []
+		const refused: string[] = []
+		for (const { name, address } of multicastInterfaces()) {
+			try {
+				socket.addMembership(MCAST_ADDR, address)
+				joined.push(`${name} (${address})`)
+			} catch {
+				// Some Windows interfaces refuse multicast; a virtual adapter that is
+				// up but unroutable also lands here. Not fatal on its own.
+				refused.push(`${name} (${address})`)
 			}
 		}
-		if (!joinedAny) {
+		if (!joined.length) {
 			try {
 				socket.addMembership(MCAST_ADDR)
-			} catch {
-				/* ignore */
+				joined.push('default route only')
+			} catch (err) {
+				diag(
+					'error',
+					`Could not join multicast group ${MCAST_ADDR} on ANY interface (${(err as Error).message}). ` +
+						`Discovery cannot work here — set the LV1 IP manually.`,
+				)
 			}
+		}
+		if (joined.length) {
+			diag('info', `Discovery listening on ${MCAST_ADDR}:${MCAST_PORT} via ${joined.join(', ')}`)
+		}
+		if (refused.length) {
+			diag('warn', `Interfaces that refused multicast (ignored): ${refused.join(', ')}`)
 		}
 	})
 

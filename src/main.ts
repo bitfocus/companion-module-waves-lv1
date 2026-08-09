@@ -15,7 +15,7 @@ import { UpdateFeedbacks } from './feedbacks.js'
 import { UpdatePresets } from './presets.js'
 import { UpgradeScripts } from './upgrades.js'
 import { OscTcpClient } from './osc-tcp.js'
-import { discover } from './zdns-discover.js'
+import { discover, multicastInterfaces } from './zdns-discover.js'
 import { cancelDiscovery, ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
@@ -223,13 +223,27 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			const entries = await discover({
 				timeoutMs: 6000,
 				filterHostIp: host || undefined,
+				// Surface bind failures and the interface list into the Companion log —
+				// otherwise "no LV1 found" is the only thing the operator ever sees, and
+				// it reads the same whether the desk is off, on another subnet, or the
+				// discovery socket never bound at all.
+				onDiagnostic: (level, message) => this.log(level, message),
 			}).done
 			if (!entries.length) {
+				const ifaces = multicastInterfaces()
+				const where = ifaces.length
+					? ifaces.map((i) => `${i.name} (${i.address})`).join(', ')
+					: 'no usable network interfaces'
+				this.log(
+					'warn',
+					`No LV1 announcements in 6 s. Listened on: ${where}. If the LV1 is not on one of those subnets, ` +
+						`multicast cannot reach us — enter the LV1 IP manually and leave the port at 0.`,
+				)
 				this.updateStatus(
 					InstanceStatus.BadConfig,
 					host
-						? `No LV1 matching ${host} found in 6 s. Check the IP or pick from the dropdown.`
-						: 'No LV1 found on the LAN in 6 s. Pick one from the dropdown or enter an IP manually.',
+						? `No LV1 matching ${host} found in 6 s. Check the IP, and leave the port at 0.`
+						: `No LV1 found on ${ifaces.length} interface(s) in 6 s. Enter the LV1 IP manually, or see Help → "If it doesn't connect".`,
 				)
 				return
 			}
@@ -263,7 +277,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	private async rediscoverPort(): Promise<void> {
 		if (!this.lastHost || !this.osc) return
 		this.log('info', `Reconnect failing — running a fresh zDNS scan to find ${this.lastHost}'s new port…`)
-		const results = await refreshDiscovery(5000)
+		const results = await refreshDiscovery(5000, (level, message) => this.log(level, message))
 		const match = results.find((e) => e.addresses.includes(this.lastHost!))
 		if (!match || match.port == null) {
 			this.log('warn', `No zDNS match for ${this.lastHost} — will keep retrying current port`)

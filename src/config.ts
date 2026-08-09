@@ -1,5 +1,6 @@
 import { SomeCompanionConfigField } from '@companion-module/base'
 import { getDiscoveryCache, refreshDiscovery } from './discovery-cache.js'
+import { multicastInterfaces } from './zdns-discover.js'
 
 export interface ModuleConfig {
 	/** Encoded "ip:port" picked from the discovered-LV1s dropdown. Empty = use custom host/port. */
@@ -19,10 +20,23 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 	void refreshDiscovery()
 
 	const ageStr = ageMs >= 0 ? `${Math.round(ageMs / 1000)} s ago` : 'never'
+
+	// Name the interfaces we scan on. When the list comes back empty the operator's
+	// only real question is whether we are even listening on the cable the desk is
+	// patched into — "scanning…" does not answer that, and a FOH machine whose Wi-Fi
+	// holds the default route while Ethernet holds the desk is the normal case.
+	const ifaces = multicastInterfaces()
+	const ifaceList = ifaces.length
+		? ifaces.map((i) => `${i.name} ${i.address}`).join(', ')
+		: 'none found — check this machine has an active network interface'
+
 	const discoveryStatus =
 		entries.length === 0
-			? '⏳ No LV1s discovered yet. A scan is running in the background — close this dialog and reopen it in a few seconds to see results.'
-			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} discovered (cached ${ageStr}). A fresh scan was just kicked off — close and reopen this dialog to see updated results.`
+			? `⏳ No LV1s discovered yet. A scan is running in the background — close this dialog and reopen it in a few seconds.\n\n` +
+				`Scanning on: ${ifaceList}\n\n` +
+				`The LV1 must be on one of those subnets for auto-discovery to reach it. If it is not (routed network, VPN, Companion in Docker), leave the dropdown alone and type the LV1's IP into "LV1 IP (override)" below — with port 0 the module still finds the port itself.`
+			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} discovered (cached ${ageStr}). A fresh scan was just kicked off — close and reopen this dialog to see updated results.\n\n` +
+				`Scanning on: ${ifaceList}`
 
 	const selectChoices = [
 		{

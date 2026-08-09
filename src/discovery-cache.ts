@@ -19,10 +19,16 @@ export function getDiscoveryCache(): { entries: DiscoveryEntry[]; ageMs: number 
 	return { entries: cache, ageMs: cacheTimestamp ? Date.now() - cacheTimestamp : -1 }
 }
 
-/** Run a discovery now. If one is already in flight, returns the same promise. */
-export async function refreshDiscovery(timeoutMs = 5000): Promise<DiscoveryEntry[]> {
+/** Run a discovery now. If one is already in flight, returns the same promise.
+ *  `onDiagnostic` reports which interfaces were joined and any bind failure —
+ *  pass the instance logger so a socket that never bound is visible instead of
+ *  looking identical to "no LV1 on the network". */
+export async function refreshDiscovery(
+	timeoutMs = 5000,
+	onDiagnostic?: (level: 'info' | 'warn' | 'error', message: string) => void,
+): Promise<DiscoveryEntry[]> {
 	if (scanInFlight) return scanInFlight
-	const handle = discover({ timeoutMs })
+	const handle = discover({ timeoutMs, onDiagnostic })
 	scanHandle = handle
 	scanInFlight = handle.done
 		.then((results) => {
