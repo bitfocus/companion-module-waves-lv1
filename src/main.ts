@@ -23,7 +23,11 @@ import { trackSlug } from './tracks.js'
 
 interface ChannelState {
 	muted: boolean
-	gain: number // dB — the channel fader ("channel volume")
+	/** Channel fader ("channel volume"), dB. `null` = the console has not told us
+	 *  yet, which is NOT the same as 0 dB. Defaulting this to a number is what
+	 *  made every `*_gain` variable report a confident "0.0", and what made
+	 *  "Fade to target dB" ramp from unity on a fader that was really at −∞. */
+	gain: number | null
 	solo: boolean
 	color: { r: number; g: number; b: number } | null
 	name: string | null
@@ -899,7 +903,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		const key = `${group}.${ch}`
 		let s = this.channels.get(key)
 		if (!s) {
-			s = { muted: false, gain: 0, solo: false, color: null, name: null, pan: 0, width: 1, inGain: null, trim: null }
+			s = { muted: false, gain: null, solo: false, color: null, name: null, pan: 0, width: 1, inGain: null, trim: null }
 			this.channels.set(key, s)
 		}
 		return s
