@@ -583,6 +583,11 @@ export function UpdateActions(self: LV1Instance): void {
 				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
 				const mode = await resolveStateAsync(a.options, 'state', context, 'on')
 				const on = mode === 'on' ? 1 : 0
+				// Optimistic, like mute/solo: the LV1 does echo this one back
+				// (/Notify/PhantomState, verified live), but the echo is the only
+				// source we ever get, so reflecting it immediately keeps a rapid
+				// double-press coherent and lights the button without a round trip.
+				self.applyChannelDelta(0, ch, { phantom: on === 1 })
 				self.send('/SetTrackPhantomState', [intCh(0), intCh(ch), intCh(0), intCh(on)])
 			},
 		},
@@ -594,6 +599,7 @@ export function UpdateActions(self: LV1Instance): void {
 				const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
 				const mode = await resolveStateAsync(a.options, 'state', context, 'on')
 				const on = mode === 'on' ? 1 : 0
+				self.applyChannelDelta(0, ch, { polarity: on === 1 })
 				self.send('/SetTrackPhaseState', [intCh(0), intCh(ch), intCh(0), intCh(on)])
 			},
 		},
