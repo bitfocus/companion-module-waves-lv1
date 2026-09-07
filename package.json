@@ -11,7 +11,8 @@
 		"build:main": "tsc -p tsconfig.build.json",
 		"dev": "tsc -p tsconfig.build.json --watch",
 		"lint:raw": "eslint",
-		"lint": "yarn lint:raw ."
+		"lint": "yarn lint:raw .",
+		"test": "yarn build && node --test test/*.test.mjs"
 	},
 	"license": "MIT",
 	"repository": {

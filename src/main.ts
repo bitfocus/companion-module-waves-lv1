@@ -20,6 +20,7 @@ import { cancelDiscovery, ensureInitialScan, findInCache, refreshDiscovery } fro
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
 import { trackSlug } from './tracks.js'
+import { isTalkBackDestinationNotification } from './internal-assign.js'
 
 interface ChannelState {
 	muted: boolean
@@ -427,7 +428,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			case '/Notify/InternalAssign': {
 				// ,iiiiii [group, ch, type, sub, state, validFlag]
 				// The 3rd int (type) is a selector:
-				//   type=2 → TalkBack DESTINATION toggle. group=8 ch=0 fixed.
+				//   type=2, group=8, ch=0 → TalkBack DESTINATION toggle.
+				//   Other type=2 packets are ordinary internal routes, for example
+				//   Input → FX, and must not change TalkBack feedbacks.
 				//            sub = aux destination idx (0-based). state = panel button on/off.
 				//            Verified live 2026-06-02: clicking a destination in the LV1 TB
 				//            panel broadcasts this with the new state.
@@ -442,7 +445,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const sub = intArg(m, 3)
 				const state = intArg(m, 4)
 				if (g == null || ch == null || type == null || sub == null || state == null) return
-				if (type === 2) {
+				if (isTalkBackDestinationNotification(g, ch, type)) {
 					// TalkBack destination state. Track by sub (= aux idx).
 					this.tbDestEnabled.set(sub, state === 1)
 					this.checkFeedbacks('talkBackToOutput')
