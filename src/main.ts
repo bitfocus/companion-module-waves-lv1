@@ -23,12 +23,20 @@ import { trackSlug } from './tracks.js'
 
 interface ChannelState {
 	muted: boolean
-	gain: number // dB
+	/** Channel fader ("channel volume"), dB. `null` = the console has not told us
+	 *  yet, which is NOT the same as 0 dB. Defaulting this to a number is what
+	 *  made every `*_gain` variable report a confident "0.0", and what made
+	 *  "Fade to target dB" ramp from unity on a fader that was really at −∞. */
+	gain: number | null
 	solo: boolean
 	color: { r: number; g: number; b: number } | null
 	name: string | null
 	pan: number // -1 (full L) … +1 (full R), 0 = center
 	width: number // 0 (mono) … 1 (full stereo)
+	/** Preamp / input gain, dB. From /Notify/TrackInGain, sub-index 0. null until published. */
+	inGain: number | null
+	/** Digital trim, dB. From /Notify/TrackTrim, sub-index 0. null until published. */
+	trim: number | null
 }
 interface SendState {
 	on: boolean
@@ -376,6 +384,40 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				pushTrackVariable(this, g, ch, 'gain')
 				break
 			}
+			case '/Notify/TrackInGain':
+			case '/Notify/TrackTrim': {
+				// VERIFIED LIVE (eMotion LV1 v.16.5.18.404, 2026-08-08):
+				//   typetag ,iiif — [group, channel, subIndex(0|1), value(f)]
+				// Arrives once per strip in the post-handshake flood: TrackInGain 37×
+				// across 35 distinct (group, channel) pairs, TrackTrim 35× across 34.
+				// Groups seen: 0 (input), 2 (aux/FX), 3 (LR), 6 (matrix), 7 (cue), 8 (TB).
+				//
+				// args[2] is a SUB-INDEX, not the value — it only ever takes 0 or 1, which
+				// is the L/R leg of a stereo strip. We key state on (group, channel) and
+				// keep leg 0 as the strip's value; leg 1 is dropped rather than silently
+				// overwriting leg 0 with a different number.
+				//
+				// ⚠️ VALUE FIELD OBSERVED CONSTANT AT 0.0. Every preamp on the capture rig
+				// sat at its default, so while the field is unambiguously the value slot
+				// (it is the only float, and it is strip-addressed), the dB mapping is NOT
+				// confirmed against a moved preamp. It is surfaced verbatim, unscaled.
+				const g = intArg(m, 0)
+				const ch = intArg(m, 1)
+				const sub = intArg(m, 2)
+				const vArg = m.args[3]
+				const v = vArg?.type === 'f' || vArg?.type === 'd' ? vArg.value : null
+				if (g == null || ch == null || v == null) return
+				if (sub !== 0) break // stereo leg 1 — see note above
+				const s = this.ensureChannel(g, ch)
+				if (addr === '/Notify/TrackInGain') {
+					s.inGain = v
+					pushTrackVariable(this, g, ch, 'ingain')
+				} else {
+					s.trim = v
+					pushTrackVariable(this, g, ch, 'trim')
+				}
+				break
+			}
 			case '/Notify/Solo': {
 				const g = intArg(m, 0),
 					ch = intArg(m, 1),
@@ -522,12 +564,37 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				//   Signature: ,i s iidd iiiiiiiiiiii hd × N
 				//     args[0] = track count (e.g. 126 for 80ch/32aux mode)
 				//     args[1..]: per track 19 args: name(s), group(i), ch(i), 2×d, 12×i, h, d
-				//   We only need name + group + ch for the picker labels & variables.
 				//   See lv1_channels_endpoint.md memory for full schema.
+				//
+				// VERIFIED LIVE (eMotion LV1 v.16.5.18.404, 2026-08-08): the FIRST double
+				// (args[base+3]) is the channel fader in dB — the same value the console
+				// streams on /Notify/Track/Out/Gain. Confirmed by cross-check: the capture
+				// showed "Channel 1" = 6.5 here AND /Notify/Track/Out/Gain g0.ch0 = d:6.5,
+				// while every other strip read -144 (−∞).
+				//
+				// ⛔ THIS TABLE IS THE ONLY SOURCE OF FADER STATE FOR MOST STRIPS.
+				// MEASURED over a 15 s idle capture: the console publishes
+				// /Notify/Track/Out/Gain for exactly ONE (group, channel) — g0.ch0 — at a
+				// steady ~12 Hz, and never sends it for any other strip.
+				//
+				// The failure mode this fixes (issue #13) is SILENT, not visible: because
+				// ensureChannel() defaults gain to 0 and this handler already created a
+				// ChannelState for every strip (for the name), every other `*_gain`
+				// variable read a confident "0.0" — unity — no matter where the fader
+				// actually sat. MEASURED before/after against the same live console:
+				//   before → in2_gain = "0.0"    (default, fader really at −∞)
+				//   after  → in2_gain = "-144.0" (the console's actual value)
+				// A button or trigger built on that variable was acting on a wrong number,
+				// which is worse than a variable that is simply blank.
+				//
+				// The second double and the 12 ints are NOT decoded here: on the capture rig
+				// every strip carried identical values, so there is no variation to attribute
+				// a meaning to. Naming them would be invention.
 				const args = m.args
 				const count = args[0]?.type === 'i' ? args[0].value : 0
 				if (count <= 0 || count > 256) break
 				let updated = 0
+				let gainsSeeded = 0
 				for (let i = 0; i < count; i++) {
 					const base = 1 + i * 19
 					if (base + 2 >= args.length) break
@@ -543,11 +610,21 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 						s.name = name
 						updated++
 					}
+					const faderArg = args[base + 3]
+					if (faderArg?.type === 'd' || faderArg?.type === 'f') {
+						if (s.gain !== faderArg.value) {
+							s.gain = faderArg.value
+							gainsSeeded++
+						}
+					}
 				}
-				if (updated > 0) {
-					this.log('info', `/Channels arrived (${count} tracks, ${updated} name updates)`)
-					this.updateActions()
-					this.updateFeedbacks()
+				if (updated > 0 || gainsSeeded > 0) {
+					this.log('info', `/Channels arrived (${count} tracks, ${updated} name updates, ${gainsSeeded} fader values)`)
+					// Names feed the action/feedback pickers; faders only feed variables.
+					if (updated > 0) {
+						this.updateActions()
+						this.updateFeedbacks()
+					}
 					this.updateVariables()
 				}
 				break
@@ -826,7 +903,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		const key = `${group}.${ch}`
 		let s = this.channels.get(key)
 		if (!s) {
-			s = { muted: false, gain: 0, solo: false, color: null, name: null, pan: 0, width: 1 }
+			s = { muted: false, gain: null, solo: false, color: null, name: null, pan: 0, width: 1, inGain: null, trim: null }
 			this.channels.set(key, s)
 		}
 		return s

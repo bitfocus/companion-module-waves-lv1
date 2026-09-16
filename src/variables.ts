@@ -20,7 +20,9 @@ export function UpdateVariables(self: LV1Instance): void {
 		defs.push({ variableId: `${slug}_name`, name: `${label} — name` })
 		defs.push({ variableId: `${slug}_mute`, name: `${label} — mute (on/off)` })
 		defs.push({ variableId: `${slug}_solo`, name: `${label} — solo (on/off)` })
-		defs.push({ variableId: `${slug}_gain`, name: `${label} — fader (dB)` })
+		defs.push({ variableId: `${slug}_gain`, name: `${label} — fader / channel volume (dB)` })
+		defs.push({ variableId: `${slug}_ingain`, name: `${label} — preamp input gain (read-only)` })
+		defs.push({ variableId: `${slug}_trim`, name: `${label} — digital trim (read-only)` })
 		defs.push({ variableId: `${slug}_pan`, name: `${label} — pan (-1..+1)` })
 		defs.push({ variableId: `${slug}_width`, name: `${label} — stereo width (0..1)` })
 		defs.push({ variableId: `${slug}_vu`, name: `${label} — VU meter, L/mono (dB, ~0.8 Hz)` })
@@ -75,6 +77,8 @@ export function pushAll(self: LV1Instance): void {
 		values[`${slug}_mute`] = s?.muted ? 'on' : 'off'
 		values[`${slug}_solo`] = s?.solo ? 'on' : 'off'
 		values[`${slug}_gain`] = s?.gain != null ? s.gain.toFixed(1) : ''
+		values[`${slug}_ingain`] = s?.inGain != null ? s.inGain.toFixed(1) : ''
+		values[`${slug}_trim`] = s?.trim != null ? s.trim.toFixed(1) : ''
 		values[`${slug}_pan`] = s?.pan != null ? s.pan.toFixed(2) : ''
 		values[`${slug}_width`] = s?.width != null ? s.width.toFixed(2) : ''
 		values[`${slug}_color`] = s?.color ? toHex(s.color) : ''
@@ -122,7 +126,7 @@ export function pushTrack(
 	self: LV1Instance,
 	group: number,
 	ch: number,
-	prop: 'mute' | 'solo' | 'gain' | 'pan' | 'width' | 'name' | 'color',
+	prop: 'mute' | 'solo' | 'gain' | 'ingain' | 'trim' | 'pan' | 'width' | 'name' | 'color',
 ): void {
 	const slug = trackSlug(group, ch)
 	const s = self.channels.get(`${group}.${ch}`)
@@ -131,6 +135,8 @@ export function pushTrack(
 	if (prop === 'mute') v[`${slug}_mute`] = s.muted ? 'on' : 'off'
 	if (prop === 'solo') v[`${slug}_solo`] = s.solo ? 'on' : 'off'
 	if (prop === 'gain') v[`${slug}_gain`] = s.gain != null ? s.gain.toFixed(1) : ''
+	if (prop === 'ingain') v[`${slug}_ingain`] = s.inGain != null ? s.inGain.toFixed(1) : ''
+	if (prop === 'trim') v[`${slug}_trim`] = s.trim != null ? s.trim.toFixed(1) : ''
 	if (prop === 'pan') v[`${slug}_pan`] = s.pan != null ? s.pan.toFixed(2) : ''
 	if (prop === 'width') v[`${slug}_width`] = s.width != null ? s.width.toFixed(2) : ''
 	if (prop === 'name') v[`${slug}_name`] = s.name ?? ''

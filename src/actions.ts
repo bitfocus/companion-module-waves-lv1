@@ -302,11 +302,27 @@ export function UpdateActions(self: LV1Instance): void {
 				const durationMs = await resolveNumberAsync(a.options, 'duration', context, 1000)
 				if (target === 'out') {
 					const { group, ch } = await resolveTrackAsync(a.options, context)
-					const currentDb = self.channels.get(`${group}.${ch}`)?.gain ?? 0
-					self.startFade(`out_${group}.${ch}`, currentDb, targetDb, durationMs, (db) => {
+					const apply = (db: number) => {
 						self.applyChannelDelta(group, ch, { gain: db })
 						self.send('/Set/Track/Out/Gain', [intCh(group), intCh(ch), { type: 'd', value: db }])
-					})
+					}
+					// ⛔ NEVER RAMP FROM A GUESS. A fade interpolates from wherever we
+					// believe the fader is, so an assumed start value is applied to a real
+					// fader on the very first tick. This used to read `?? 0`, i.e. unity —
+					// so fading a strip that was actually at −∞ SLAMMED it to 0 dB and then
+					// ramped down. On a live desk that is a full-level blast, from an action
+					// whose whole purpose is to be gentle. (The send branch below already
+					// defaulted to −144 for the same reason.)
+					const currentDb = self.channels.get(`${group}.${ch}`)?.gain
+					if (currentDb == null) {
+						// The console has not published this fader yet. Jumping straight to
+						// the requested target is both safe and what the operator asked for;
+						// inventing a start point is neither.
+						self.log('warn', `Fade: no known fader value for ${group}.${ch} yet — setting ${targetDb} dB directly`)
+						apply(targetDb)
+					} else {
+						self.startFade(`out_${group}.${ch}`, currentDb, targetDb, durationMs, apply)
+					}
 				} else {
 					const ch = await resolveIndexAsync(a.options, 'inputCh', context, 0)
 					const aux = await resolveIndexAsync(a.options, 'aux', context, 0)
