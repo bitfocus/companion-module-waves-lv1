@@ -19,6 +19,7 @@ import { discover } from './zdns-discover.js'
 import { cancelDiscovery, ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
+import { channelFeedbacksForDelta } from './channel-feedbacks.js'
 import { trackSlug } from './tracks.js'
 
 interface ChannelState {
@@ -419,11 +420,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const s = this.ensureChannel(g, ch)
 				if (addr === '/Notify/PhaseState') {
 					s.polarity = state !== 0
-					this.checkFeedbacks('channelPolarity')
+					this.checkFeedbacks(...channelFeedbacksForDelta({ polarity: s.polarity }))
 					pushTrackVariable(this, g, ch, 'polarity')
 				} else {
 					s.phantom = state !== 0
-					this.checkFeedbacks('channelPhantom')
+					this.checkFeedbacks(...channelFeedbacksForDelta({ phantom: s.phantom }))
 					pushTrackVariable(this, g, ch, 'phantom')
 				}
 				break
@@ -900,6 +901,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	applyChannelDelta(group: number, ch: number, delta: Partial<ChannelState>): void {
 		const s = this.ensureChannel(group, ch)
 		Object.assign(s, delta)
+		const channelFeedbacks = channelFeedbacksForDelta(delta)
+		if (channelFeedbacks.length) this.checkFeedbacks(...channelFeedbacks)
 		if (delta.muted != null) {
 			this.checkFeedbacks('channelMute')
 			pushTrackVariable(this, group, ch, 'mute')
@@ -913,11 +916,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (delta.width != null) pushTrackVariable(this, group, ch, 'width')
 		if (delta.name != null) pushTrackVariable(this, group, ch, 'name')
 		if (delta.polarity != null) {
-			this.checkFeedbacks('channelPolarity')
 			pushTrackVariable(this, group, ch, 'polarity')
 		}
 		if (delta.phantom != null) {
-			this.checkFeedbacks('channelPhantom')
 			pushTrackVariable(this, group, ch, 'phantom')
 		}
 	}
