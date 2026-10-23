@@ -8,30 +8,54 @@ Built on a complete reverse-engineering of the iPad MyFOH and iPhone MyMon
 apps plus the PC-side `MyMonService.dll` — every supported `/Set/…` action
 has been verified byte-for-byte against live captured traffic.
 
+## Quick start
+
+Nothing needs to be installed on the LV1 machine — no plugin, driver, OSC relay
+or script. This module speaks the same protocol as the official iPad **MyFOH**
+app, so the desk already knows how to talk to it. Just make sure **eMotion LV1
+is running** and Companion is on the same network.
+
+1. Add the **Waves: LV1** connection in Companion.
+2. Open its config, wait a few seconds, then **close and reopen it** — the scan
+   runs in the background, and reopening is what shows the results.
+3. Pick your mixer from **Discovered LV1** and save.
+
+**Dropdown empty?** You don't need discovery. Type the LV1's IP into **LV1 IP
+(override)** and leave **LV1 port at `0`** — port `0` means "find it yourself",
+which also works across VLANs, over VPN, and in Docker.
+
+> ⚠️ Never hard-code the port: the LV1 picks a new control port every time
+> eMotion LV1 launches, and again on every mixer-mode change. Left at `0`, the
+> module re-finds it automatically.
+
+If it doesn't connect, open Companion's log with Info messages enabled — the
+module names every network interface it scanned and reports why it failed. Full
+troubleshooting table in [`companion/HELP.md`](companion/HELP.md).
+
 ## Features at a glance
 
-| Domain | What you get |
-|---|---|
-| Auto-discovery | Custom Waves `/zDNS` multicast — finds the LV1 on the LAN with no config |
-| Mute / Solo | Any track (Input / Group / Aux / LR / C / M / Matrix / Cue / TB / DCA), with optimistic local feedback |
-| Faders | Set / fade (linear ramp in dB, 0-60 s, cancellable), per-track + per-send |
-| Pan & Width | Channel pan, stereo width, send pan |
-| Sends | On / Off / Toggle / gain / pan, with focus-an-aux (`/Set/AuxId`) |
-| Preamp | Input gain, digital trim, +48 V, polarity |
-| Plugins | Enable / disable EQ / Filter / Comp / DeEsser / Dyn / Gate / Leveler / Limiter |
-| EQ | Bands 1-6 freq / gain / Q |
-| Scenes | Recall by name (dropdown), by index, next / previous |
-| Surface | User keys (1-16), mute groups (1-8), tap tempo, rename |
-| Feedbacks | Live mirror of mute / solo / send-on / mute-group / scene + meter > threshold + channel color |
-| Variables | Per-track name / mute / solo / gain / color; per-scene name; global tempo, scene index/name, mute groups |
-| Raw | Send any OSC address with typed args for what's not yet wrapped |
+| Domain         | What you get                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| Auto-discovery | Custom Waves `/zDNS` multicast — finds the LV1 on the LAN with no config                                 |
+| Mute / Solo    | Any track (Input / Group / Aux / LR / C / M / Matrix / Cue / TB / DCA), with optimistic local feedback   |
+| Faders         | Set / fade (linear ramp in dB, 0-60 s, cancellable), per-track + per-send                                |
+| Pan & Width    | Channel pan, stereo width, send pan                                                                      |
+| Sends          | On / Off / Toggle / gain / pan, with focus-an-aux (`/Set/AuxId`)                                         |
+| Preamp         | Input gain, digital trim, +48 V, polarity                                                                |
+| Plugins        | Enable / disable EQ / Filter / Comp / DeEsser / Dyn / Gate / Leveler / Limiter                           |
+| EQ             | Bands 1-6 freq / gain / Q                                                                                |
+| Scenes         | Recall by name (dropdown), by index, next / previous                                                     |
+| Surface        | User keys (1-16), mute groups (1-8), tap tempo, rename                                                   |
+| Feedbacks      | Live mirror of mute / solo / send-on / mute-group / scene + meter > threshold + channel color            |
+| Variables      | Per-track name / mute / solo / gain / color; per-scene name; global tempo, scene index/name, mute groups |
+| Raw            | Send any OSC address with typed args for what's not yet wrapped                                          |
 
 See `companion/HELP.md` for the full reference.
 
 ## Protocol highlights
 
 - **Custom 8-byte framing** per OSC packet (`[4B BE size][8B header][N bytes
-  OSC]`). Plain OSC clients fail silently.
+OSC]`). Plain OSC clients fail silently.
 - **`/ping`/`/pong` keepalive** at ~1 Hz. The module's TCP client auto-pongs.
 - **Two valid handshakes** — `MyFOH` (one TCP write batching
   `/handshake [1,-1,1]` + `/device_name`) or `MyMon`
