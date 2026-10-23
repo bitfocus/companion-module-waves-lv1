@@ -56,6 +56,49 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			},
 		},
 
+		channelPolarity: {
+			type: 'boolean',
+			name: 'Channel polarity (phase) inverted',
+			description: 'True when the channel polarity is inverted.',
+			defaultStyle: { bgcolor: combineRgb(150, 90, 0), color: combineRgb(255, 255, 255) },
+			options: trackPicker,
+			callback: async (fb, context) => {
+				const { group, ch } = await resolveTrackAsync(fb.options, context)
+				return self.channels.get(`${group}.${ch}`)?.polarity === true
+			},
+		},
+
+		channelPhantom: {
+			type: 'boolean',
+			name: 'Channel +48 V phantom ON',
+			description:
+				'True ONLY when the console has told us phantom is on. The LV1 does not report phantom until it ' +
+				'changes, so after a fresh connect this reads false — meaning "not known to be on", NOT ' +
+				'"known to be off". Pair with "+48 V state unknown" if that distinction matters to you.',
+			defaultStyle: { bgcolor: combineRgb(200, 60, 0), color: combineRgb(255, 255, 255) },
+			options: trackPicker,
+			callback: async (fb, context) => {
+				const { group, ch } = await resolveTrackAsync(fb.options, context)
+				return self.channels.get(`${group}.${ch}`)?.phantom === true
+			},
+		},
+
+		channelPhantomUnknown: {
+			type: 'boolean',
+			name: 'Channel +48 V state unknown',
+			description:
+				'True when the console has not yet reported phantom for this channel. MEASURED: ' +
+				'/Notify/PhantomState is absent from the connect flood and only arrives on change, so this is the ' +
+				'honest state after a fresh connect. Use it to grey out a +48 V button rather than showing a ' +
+				'confident "off" for a channel that may be live at 48 V.',
+			defaultStyle: { bgcolor: combineRgb(60, 60, 60), color: combineRgb(160, 160, 160) },
+			options: trackPicker,
+			callback: async (fb, context) => {
+				const { group, ch } = await resolveTrackAsync(fb.options, context)
+				return self.channels.get(`${group}.${ch}`)?.phantom == null
+			},
+		},
+
 		channelSolo: {
 			type: 'boolean',
 			name: 'Channel solo',

@@ -19,6 +19,7 @@ import { discover, multicastInterfaces } from './zdns-discover.js'
 import { cancelDiscovery, ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
+import { channelFeedbacksForDelta } from './channel-feedbacks.js'
 import { trackSlug } from './tracks.js'
 
 interface ChannelState {
@@ -37,6 +38,19 @@ interface ChannelState {
 	inGain: number | null
 	/** Digital trim, dB. From /Notify/TrackTrim, sub-index 0. null until published. */
 	trim: number | null
+	/** Polarity (phase) invert. From /Notify/PhaseState arg[3], sub-index 0.
+	 *  `null` until the console publishes it. */
+	polarity: boolean | null
+	/** +48 V phantom power. From /Notify/PhantomState arg[3], sub-index 0.
+	 *
+	 *  ⛔ `null` IS LOAD-BEARING HERE, NOT TIDINESS. MEASURED: the console does
+	 *  NOT send /Notify/PhantomState in the post-handshake flood — it appears only
+	 *  when phantom actually changes. So on a fresh connect we genuinely do not
+	 *  know. Defaulting to `false` would paint "+48 V off" on a button for a
+	 *  channel that is live at 48 V, and that is the wrong direction to be wrong
+	 *  in: someone unplugs a ribbon mic trusting it. Unknown must render blank,
+	 *  never as "off". */
+	phantom: boolean | null
 }
 interface SendState {
 	on: boolean
@@ -429,6 +443,45 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				} else {
 					s.trim = v
 					pushTrackVariable(this, g, ch, 'trim')
+				}
+				break
+			}
+			case '/Notify/PhaseState':
+			case '/Notify/PhantomState': {
+				// VERIFIED LIVE (eMotion LV1 v.16.5.18.404, 2026-08-09):
+				//   typetag ,iiiii — [group, channel, subIndex(0|1), state(0|1), flag]
+				//
+				// args[3] is the state. Proven by writing, not by guessing: sending
+				// /SetTrackPhaseState [g,ch,0,1] came back as [i:0 i:15 i:0 i:1 i:1] and
+				// [g,ch,0,0] came back as [i:0 i:15 i:0 i:0 i:1] — args[3] tracked the
+				// value we wrote, in both directions.
+				//
+				// args[2] is a sub-index (the L/R leg of a stereo strip), not a value; we
+				// keep leg 0 as the strip's state. args[4] is constant per strip and
+				// correlates with strip type (1 on inputs, 0 on LR) — it looks like a
+				// "polarity available here" capability flag, but that is NOT confirmed,
+				// so nothing is inferred from it.
+				//
+				// COVERAGE DIFFERS BETWEEN THE TWO, and it matters:
+				//   /Notify/PhaseState   arrives 37× in the connect flood (all strips)
+				//   /Notify/PhantomState never appears on connect — only on change
+				// So polarity is known from connect; phantom stays null until someone
+				// moves it. See the ChannelState doc comment for why that stays null.
+				const g = intArg(m, 0)
+				const ch = intArg(m, 1)
+				const sub = intArg(m, 2)
+				const state = intArg(m, 3)
+				if (g == null || ch == null || state == null) return
+				if (sub !== 0) break // stereo leg 1 — don't clobber leg 0
+				const s = this.ensureChannel(g, ch)
+				if (addr === '/Notify/PhaseState') {
+					s.polarity = state !== 0
+					this.checkFeedbacks(...channelFeedbacksForDelta({ polarity: s.polarity }))
+					pushTrackVariable(this, g, ch, 'polarity')
+				} else {
+					s.phantom = state !== 0
+					this.checkFeedbacks(...channelFeedbacksForDelta({ phantom: s.phantom }))
+					pushTrackVariable(this, g, ch, 'phantom')
 				}
 				break
 			}
@@ -917,7 +970,19 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		const key = `${group}.${ch}`
 		let s = this.channels.get(key)
 		if (!s) {
-			s = { muted: false, gain: null, solo: false, color: null, name: null, pan: 0, width: 1, inGain: null, trim: null }
+			s = {
+				muted: false,
+				gain: null,
+				solo: false,
+				color: null,
+				name: null,
+				pan: 0,
+				width: 1,
+				inGain: null,
+				trim: null,
+				polarity: null,
+				phantom: null,
+			}
 			this.channels.set(key, s)
 		}
 		return s
@@ -929,6 +994,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	applyChannelDelta(group: number, ch: number, delta: Partial<ChannelState>): void {
 		const s = this.ensureChannel(group, ch)
 		Object.assign(s, delta)
+		const channelFeedbacks = channelFeedbacksForDelta(delta)
+		if (channelFeedbacks.length) this.checkFeedbacks(...channelFeedbacks)
 		if (delta.muted != null) {
 			this.checkFeedbacks('channelMute')
 			pushTrackVariable(this, group, ch, 'mute')
@@ -941,6 +1008,12 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (delta.pan != null) pushTrackVariable(this, group, ch, 'pan')
 		if (delta.width != null) pushTrackVariable(this, group, ch, 'width')
 		if (delta.name != null) pushTrackVariable(this, group, ch, 'name')
+		if (delta.polarity != null) {
+			pushTrackVariable(this, group, ch, 'polarity')
+		}
+		if (delta.phantom != null) {
+			pushTrackVariable(this, group, ch, 'phantom')
+		}
 	}
 
 	applySendDelta(group: number, ch: number, aux: number, delta: Partial<SendState>): void {
