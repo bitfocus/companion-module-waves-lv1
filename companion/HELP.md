@@ -83,6 +83,8 @@ the manual-IP method and everything else works normally.
 - **Channel: Mute / Unmute / Toggle** — any track (Input / Group / Aux / LR /
   Center / Mono / Matrix / Cue / TalkBack / DCA). Picker filters by group so
   LR shows just "Master", auxes show their real names ("Mon 1", "Fx 3").
+  Group, Matrix and DCA counts come from the desk itself (e.g. DCA/Link 1-16
+  and 16 group buses on eMotion LV1 v17).
 - **Channel: Solo / Unsolo / Toggle** — same picker.
 - **Mute Group: On / Off / Toggle** — 1-8.
 
@@ -96,8 +98,10 @@ the manual-IP method and everything else works normally.
 
 ### Pan & Width
 
-- **Channel: Pan** (-1 left … +1 right)
-- **Channel: Stereo width** (0 mono … 1 full)
+- **Channel: Pan** (-1 left … +1 right) — on a stereo strip this is the
+  rotation of the L/R pair.
+- **Channel: Stereo width** (0 mono … 1 full) — stereo strips only.
+- **Channel: Stereo balance** (-1 left … +1 right) — stereo strips only.
 - **Send: Pan**
 
 ### Sends
@@ -108,10 +112,17 @@ the manual-IP method and everything else works normally.
 ### Talk Back
 
 - **Talk Back: Engage to output** — sends the TalkBack mic (group 8) to a
-  chosen aux output. ON sets Send/On=TRUE + Send/Gain=0 dB; OFF reverses.
-  Only outputs that appear in the LV1's `/Aux/Tracks` list (FX + Mons) can
-  receive TB this way — Group / Matrix / Main destinations are not exposed
-  via OSC on the current Waves API.
+  chosen aux output (FX or Monitor). ON sets Send/On=TRUE + Send/Gain=0 dB;
+  OFF reverses.
+
+### Routing (eMotion LV1 v17+)
+
+- **Channel: Internal route (Patch > Internal)** — assign / unassign / toggle
+  a track to a Group bus, an Aux (FX / Monitor — this is the send on/off),
+  a DCA / Link, a mute group (membership, not engaging the group) or
+  LR / Center / Mono. Uses `/SetInternalAsgn`, which eMotion LV1 v16 ignores.
+  Matrix destinations are shown by the feedback but not offered by the action
+  yet: un-assigning a Matrix route from OSC did not take effect in testing.
 
 ### Surface / flip
 
@@ -150,6 +161,13 @@ the manual-IP method and everything else works normally.
 
 - **Channel muted** — paints button red.
 - **Channel solo** — paints yellow.
+- **Channel polarity (phase) inverted**
+- **Channel +48 V phantom ON** / **+48 V state unknown** — the LV1 only
+  reports phantom when it changes, so after connecting it is "unknown", not
+  "off".
+- **Channel internally routed to destination** — Patch > Internal state, read
+  on connect on v17 (8-group mixer modes) and updated live.
+- **Channel has an I/O patch (experimental)** — see "I/O patch" below.
 - **Send ON to aux** — paints green.
 - **Mute group active** — paints red.
 - **Channel color (from LV1 GUI)** — applies the channel's strip color from
@@ -172,8 +190,15 @@ the manual-IP method and everything else works normally.
 - `{slug}_name` — display name from the mixer
 - `{slug}_mute` — `"on"` / `"off"`
 - `{slug}_solo` — `"on"` / `"off"`
-- `{slug}_gain` — fader in dB, e.g. `"-7.3"`
+- `{slug}_gain` — fader in dB, e.g. `"-7.3"` (blank until the desk reports it)
+- `{slug}_ingain`, `{slug}_trim` — preamp gain / digital trim as reported
+- `{slug}_pan`, `{slug}_width`, `{slug}_balance` — pan / stereo width / balance
+- `{slug}_stereo` — `"on"` for stereo strips (v17)
+- `{slug}_polarity`, `{slug}_phantom` — `"on"` / `"off"` / blank = unknown
+- `{slug}_vu`, `{slug}_vu_r` — meter level in dB
 - `{slug}_color` — hex like `"#FF5500"`
+- `{slug}_patch` — I/O endpoints patched to the track (only with "Read I/O
+  patch" enabled)
 
 **Globals:**
 
@@ -183,9 +208,32 @@ the manual-IP method and everything else works normally.
 - `scene_count` — total scenes
 - `scene_1_name`, `scene_2_name`, … — name of each scene
 - `channels_total`, `auxes_total` — detected counts
+- `console_version` — e.g. `"v.17.6.26.456"`
 - `mg_1` … `mg_8` — mute group on/off
+- `io_patch_connections` — number of I/O connections the desk reported
+  (only with "Read I/O patch" enabled)
 
 Use on a button: `$(lv1:in1_name)`, `$(lv1:scene_name)`, `$(lv1:aux9_gain)`.
+
+## eMotion LV1 v17
+
+v17 changed how the desk addresses Monitor buses: they moved out of the aux
+group into their own group, while sends still use one combined aux list (FX
+first, then Monitors). The module handles both v16 and v17 automatically.
+Inside Companion Monitors keep their old aux numbers (`aux9` = Mon 1 with 8
+FX buses), so existing buttons, presets and variables keep working after a
+desk upgrade.
+
+### I/O patch (experimental)
+
+Enable **Read I/O patch** in the connection settings to fill `{slug}_patch`
+and the "Channel has an I/O patch" feedback. The desk only publishes its I/O
+patch to recorder clients, so the module opens a second connection that
+registers like Waves Tracks Live — it shows up on the LV1 as an extra
+connection. The patch is re-sent on every change. This has not been checked
+against real SoundGrid I/O hardware yet (a Generic/virtual I/O reports an empty
+patch): if the variables stay empty with real I/O patched, please open an
+issue and attach the Companion log with debug messages on.
 
 ## Auto-discovery
 

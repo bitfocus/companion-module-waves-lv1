@@ -21,6 +21,9 @@ import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
 import { channelFeedbacksForDelta } from './channel-feedbacks.js'
 import { trackSlug } from './tracks.js'
+import { AuxMap, parseAuxTracks } from './aux-map.js'
+import { MASK_GROUPS, decodeRouteMask, isTalkBackDest, routeKey } from './routing.js'
+import { parseIOConnections, rowLabel, rowTrack } from './io-connections.js'
 
 interface ChannelState {
 	muted: boolean
@@ -34,6 +37,10 @@ interface ChannelState {
 	name: string | null
 	pan: number // -1 (full L) … +1 (full R), 0 = center
 	width: number // 0 (mono) … 1 (full stereo)
+	/** Stereo balance, -1 … +1. Only meaningful on stereo strips. */
+	balance: number
+	/** Stereo strip (from /Channels record field 16: 1 = mono, 2 = stereo). */
+	stereo: boolean
 	/** Preamp / input gain, dB. From /Notify/TrackInGain, sub-index 0. null until published. */
 	inGain: number | null
 	/** Digital trim, dB. From /Notify/TrackTrim, sub-index 0. null until published. */
@@ -99,6 +106,27 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  TB destination buttons in the TALK BACK panel). key = aux sub idx (0-based). */
 	public tbDestEnabled = new Map<number, boolean>()
 
+	/** eMotion LV1 major version (from /Notify/ServiceVersion or /version). null = unknown. */
+	public consoleMajor: number | null = null
+
+	/** v16/v17 aux addressing (FX + Monitor) — see aux-map.ts. */
+	public auxMap = new AuxMap()
+
+	/** Internal route state (Patch > Internal), key = routing.routeKey(). Fed by
+	 *  /Notify/InternalAssign and seeded from the /Channels route bitmask. */
+	public routes = new Map<string, boolean>()
+
+	/** I/O patch per module-internal track (`${group}.${ch}`) → labels of the I/O
+	 *  endpoints patched to it. Only filled when config.readIoPatch is on. */
+	public ioPatch = new Map<string, string[]>()
+	public ioPatchRows: number | null = null
+	/** Second, recorder-type connection used to receive /Notify/IOConnections. */
+	private ioOsc: OscTcpClient | null = null
+	/** Re-handshake if /Channels does not arrive after registering (it sometimes
+	 *  does not — observed on v17 — and it is the only source of names/faders). */
+	private channelsWatchdog: NodeJS.Timeout | null = null
+	private channelsSeen = false
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -112,6 +140,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		/** User-defined custom layers (args[1]=1 in /Notify/Layers). NOT used for channel/aux
 		 *  counting — these are just the surface layout the user configured in MyFOH ("Page-1"..). */
 		customLayers?: { name: string; entries: Array<{ group: number; ch: number } | null> }[]
+		/** Track counts per group from /Channels (group 1 = buses, 6 = matrix, 12 = DCA/Link). */
+		groupCounts?: Record<number, number>
 	} = {}
 
 	/** Last successfully-resolved host/port. Used to re-discover if the LV1 changes port
@@ -151,11 +181,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.osc.disconnect()
 			this.osc = null
 		}
+		this.stopIoPatchClient()
+		if (this.channelsWatchdog) clearTimeout(this.channelsWatchdog)
+		this.channelsWatchdog = null
 	}
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
 		const restart =
-			this.config.selected !== config.selected || this.config.host !== config.host || this.config.port !== config.port
+			this.config.selected !== config.selected ||
+			this.config.host !== config.host ||
+			this.config.port !== config.port ||
+			!!this.config.readIoPatch !== !!config.readIoPatch
 		this.config = config
 
 		this.updateActions()
@@ -168,6 +204,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.osc.disconnect()
 				this.osc = null
 			}
+			this.stopIoPatchClient()
 			// L3: clear all mixer-state derived from the previous host so feedbacks
 			// don't briefly render the old mixer's values during the cross-over, and
 			// a carried-over failure count doesn't trigger a spurious re-discovery.
@@ -179,6 +216,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.userKeys.clear()
 			this.spillStates.clear()
 			this.tbDestEnabled.clear()
+			this.routes.clear()
+			this.ioPatch.clear()
+			this.ioPatchRows = null
+			this.auxMap.set([])
 			this.detected = {}
 			this.consecutiveFailures = 0
 			this.currentFlipTarget = null
@@ -291,6 +332,75 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		this.bindOscEvents(this.osc)
 		this.osc.connect()
+		if (this.config.readIoPatch) this.startIoPatchClient(host, port)
+	}
+
+	// ─── I/O patch (experimental) ─────────────────────────────────────────
+
+	/** Second connection registered as client type 6 (Tracks Live). The LV1 sends
+	 *  /Notify/IOConnections only to that client type — see io-connections.ts. It
+	 *  carries no control traffic; everything else stays on the main connection. */
+	private startIoPatchClient(host: string, port: number): void {
+		this.stopIoPatchClient()
+		const io = new OscTcpClient({
+			host,
+			port,
+			deviceName: 'Companion I/O',
+			handshakeStyle: 'tracks',
+			autoReconnect: true,
+		})
+		io.on('registered', () => this.log('info', 'I/O patch connection registered (recorder client type)'))
+		io.on('error', (err: Error) => this.log('debug', `I/O patch connection: ${err.message}`))
+		io.on('packet', ({ decoded }: { decoded: OscMessage }) => {
+			if (decoded.address === '/Notify/IOConnections') this.handleIoConnections(decoded)
+		})
+		this.ioOsc = io
+		io.connect()
+	}
+
+	private stopIoPatchClient(): void {
+		if (!this.ioOsc) return
+		this.ioOsc.removeAllListeners()
+		this.ioOsc.disconnect()
+		this.ioOsc = null
+	}
+
+	private handleIoConnections(m: OscMessage): void {
+		const rows = parseIOConnections(m.args)
+		if (rows == null) {
+			this.log('warn', `/Notify/IOConnections: unexpected shape (${m.args.length} args) — ignored`)
+			return
+		}
+		const patch = new Map<string, string[]>()
+		let unmatched = 0
+		for (const row of rows) {
+			const t = rowTrack(row)
+			const label = rowLabel(row)
+			if (!t || !label) {
+				unmatched++
+				continue
+			}
+			const [g, ch] = this.auxMap.fromWire(t.group, t.ch)
+			const key = `${g}.${ch}`
+			const list = patch.get(key) ?? []
+			if (!list.includes(label)) list.push(label)
+			patch.set(key, list)
+		}
+		this.log(
+			'info',
+			`I/O patch: ${rows.length} connection(s), ${patch.size} mixer track(s)${unmatched ? `, ${unmatched} unrecognised row(s)` : ''}`,
+		)
+		if (rows.length) this.log('debug', `I/O patch rows: ${JSON.stringify(rows.slice(0, 8))}`)
+		const stale = [...this.ioPatch.keys()].filter((k) => !patch.has(k))
+		this.ioPatch = patch
+		this.ioPatchRows = rows.length
+		const values: Record<string, string> = { io_patch_connections: String(rows.length) }
+		for (const key of [...patch.keys(), ...stale]) {
+			const [g, ch] = key.split('.').map(Number)
+			values[`${trackSlug(g, ch)}_patch`] = (patch.get(key) ?? []).join(' + ')
+		}
+		this.setVariableValues(values)
+		this.checkFeedbacks('channelHasPatch')
 	}
 
 	/** Called from the 'close' handler after enough failed reconnects to suspect the LV1
@@ -321,6 +431,18 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			// after a handshake the second time, so this keeps the dropdowns populated
 			// across module restarts.
 			this.requestStateRefresh()
+			// /Channels (names, faders, mutes, routes) normally arrives right after the
+			// handshake, but on v17 some sessions never get it. A repeated /handshake
+			// makes the server re-send /Aux/Tracks + /Channels (verified live), so ask
+			// again if it has not shown up.
+			this.channelsSeen = false
+			if (this.channelsWatchdog) clearTimeout(this.channelsWatchdog)
+			this.channelsWatchdog = setTimeout(() => {
+				this.channelsWatchdog = null
+				if (this.channelsSeen || !this.osc?.isConnected()) return
+				this.log('info', 'No /Channels after handshake — asking the LV1 again')
+				this.requestChannels()
+			}, 2500)
 		})
 		osc.on('close', () => {
 			this.updateStatus(InstanceStatus.Disconnected)
@@ -345,7 +467,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 
 	// ─── /Notify/... state handling ───────────────────────────────────────
 
-	private handleNotify(m: OscMessage): void {
+	private handleNotify(raw: OscMessage): void {
+		// v17 Monitor buses arrive as (25, local) — fold them back into (2, combined).
+		const m = this.auxMap.translateIncoming(raw)
 		const addr = m.address
 		switch (addr) {
 			case '/Notify/Track/Out/Mute': {
@@ -392,8 +516,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			case '/Notify/Track/Pan/Width':
 			case '/Notify/PanArcWidth': {
 				// Both observed in catalog; pick first numeric arg after g, ch.
+				// v17: ,iidi [g, ch, width, valid] — mono strips report d:857.143 with valid=0.
 				const g = intArg(m, 0),
 					ch = intArg(m, 1)
+				const validArg = m.args[3]
+				if (validArg?.type === 'i' && validArg.value === 0) break
 				const dArg = m.args[2]
 				const v = dArg?.type === 'd' || dArg?.type === 'f' ? dArg.value : null
 				if (g == null || ch == null || v == null) return
@@ -534,13 +661,14 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				break
 			}
 			case '/Notify/InternalAssign': {
-				// ,iiiiii [group, ch, type, sub, state, validFlag]
-				// The 3rd int (type) is a selector:
-				//   type=2 → TalkBack DESTINATION toggle. group=8 ch=0 fixed.
-				//            sub = aux destination idx (0-based). state = panel button on/off.
-				//            Verified live 2026-06-02: clicking a destination in the LV1 TB
-				//            panel broadcasts this with the new state.
-				//   type=7 → CUE source change (NOT flip itself). Only emitted when "Aux Cue
+				// ,iiiiii [srcGroup, srcCh, destGroup, destIdx, state, valid]
+				// VERIFIED LIVE (v17, 2026-10-23): the 3rd int is the DESTINATION GROUP, not a
+				// "type" selector — 1 Group, 2 FX, 25 Mon (folded to 2 + combined index by
+				// auxMap), 3/4/5 LR/C/M, 6 Matrix, 7 Cue, 12 DCA/Link, 13 mute-group membership.
+				// It fires for every internal route change, including send-on changes
+				// (Input → FX 1 arrives as [0, ch, 2, 0, 1, 1]) and TalkBack destinations
+				// ([8, 0, 2, aux, …]). See routing.ts.
+				//   dest 7 (Cue) → CUE source change (NOT flip itself). Only emitted when "Aux Cue
 				//            On Flip" is enabled on the LV1. Pairs of state=0 (old) + state=1
 				//            (new). state=1 on LR (g=3 ch=0) = no cue / default; on g=2 ch=N =
 				//            cue points at aux N (= flipped). Without Aux Cue On Flip enabled
@@ -551,13 +679,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const sub = intArg(m, 3)
 				const state = intArg(m, 4)
 				if (g == null || ch == null || type == null || sub == null || state == null) return
-				if (type === 2) {
-					// TalkBack destination state. Track by sub (= aux idx).
-					this.tbDestEnabled.set(sub, state === 1)
-					this.checkFeedbacks('talkBackToOutput')
+				if (type !== 7) {
+					this.routes.set(routeKey(g, ch, { group: type, idx: sub }), state === 1)
+					this.checkFeedbacks('routeAssigned')
+					// Only the TalkBack strip drives the TalkBack destination buttons — any
+					// other source with dest group 2 is an ordinary send (issue #21).
+					if (isTalkBackDest(g, ch, type)) {
+						this.tbDestEnabled.set(sub, state === 1)
+						this.checkFeedbacks('talkBackToOutput')
+					}
 					break
 				}
-				if (type !== 7) break
 				const isLR = g === 3 && ch === 0
 				if (state === 1) {
 					this.currentFlipTarget = isLR ? null : { group: g, ch }
@@ -569,6 +701,28 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					this.checkFeedbacks('flipActive', 'flipForTarget')
 					this.pushFlipVariables()
 				}
+				break
+			}
+			case '/Notify/ServiceVersion':
+			case '/version': {
+				// /Notify/ServiceVersion ,siii ["v.17.6.26.456", build, major, minor]; /version ,i [major]
+				const major = addr === '/version' ? intArg(m, 0) : intArg(m, 2)
+				if (major == null || major <= 0) break
+				if (this.consoleMajor !== major) this.log('info', `eMotion LV1 major version ${major}`)
+				this.consoleMajor = major
+				const label = m.args[0]?.type === 's' ? m.args[0].value : null
+				if (label) this.setVariableValues({ console_version: label })
+				break
+			}
+			case '/Notify/Balance': {
+				// ,iidi [g, ch, balance(-1..+1), valid] — stereo strips only (verified live, v17)
+				const g = intArg(m, 0),
+					ch = intArg(m, 1)
+				const dArg = m.args[2]
+				const v = dArg?.type === 'd' || dArg?.type === 'f' ? dArg.value : null
+				if (g == null || ch == null || v == null) return
+				this.ensureChannel(g, ch).balance = v
+				pushTrackVariable(this, g, ch, 'balance')
 				break
 			}
 			case '/Notify/MuteGroup': {
@@ -657,9 +811,20 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				// The second double and the 12 ints are NOT decoded here: on the capture rig
 				// every strip carried identical values, so there is no variation to attribute
 				// a meaning to. Naming them would be invention.
+				//
+				// VERIFIED LIVE (eMotion LV1 v.17.6.26.456, 2026-10-23) — same 19-arg record,
+				// more fields pinned by flipping one control at a time and re-reading:
+				//   [3] fader dB   [4] balance (stereo)   [6] mute 0/1   [16] legs 1|2 (mono|stereo)
+				//   [17] route bitmask (int64, see routing.ts)   [18] pan
+				// Only the fader is trusted on older consoles; the rest is read on v17+.
+				// v17 lists Monitor buses as group 25 — folded into (2, combined) via auxMap.
 				const args = m.args
 				const count = args[0]?.type === 'i' ? args[0].value : 0
-				if (count <= 0 || count > 256) break
+				if (count <= 0 || count > 512) break
+				this.channelsSeen = true
+				const v17 = (this.consoleMajor ?? 0) >= 17
+				const groupCounts: Record<number, number> = {}
+				const masks: Array<{ g: number; ch: number; mask: bigint }> = []
 				let updated = 0
 				let gainsSeeded = 0
 				for (let i = 0; i < count; i++) {
@@ -670,8 +835,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					const chArg = args[base + 2]
 					if (nameArg?.type !== 's' || groupArg?.type !== 'i' || chArg?.type !== 'i') continue
 					const name = nameArg.value
-					const group = groupArg.value
-					const ch = chArg.value
+					groupCounts[groupArg.value] = (groupCounts[groupArg.value] ?? 0) + 1
+					const [group, ch] = this.auxMap.fromWire(groupArg.value, chArg.value)
 					const s = this.ensureChannel(group, ch)
 					if (s.name !== name) {
 						s.name = name
@@ -684,14 +849,35 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 							gainsSeeded++
 						}
 					}
+					if (!v17) continue
+					const num = (k: number): number | null => {
+						const x = args[base + k]
+						return x?.type === 'd' || x?.type === 'f' || x?.type === 'i' ? x.value : null
+					}
+					const balance = num(4)
+					const mute = num(6)
+					const legs = num(16)
+					const pan = num(18)
+					if (balance != null) s.balance = balance
+					// Link/DCA records carry -1 in several int fields — only trust 0/1 / 1|2.
+					if (mute === 0 || mute === 1) s.muted = mute === 1
+					if (legs === 1 || legs === 2) s.stereo = legs === 2
+					if (pan != null) s.pan = pan
+					const maskArg = args[base + 17]
+					if (maskArg?.type === 'h') masks.push({ g: group, ch, mask: BigInt(maskArg.value) })
 				}
-				if (updated > 0 || gainsSeeded > 0) {
+				this.detected.groupCounts = groupCounts
+				// The bitmask layout is only mapped for the 8-group mixer modes.
+				if (v17 && groupCounts[1] === 8) this.seedRoutesFromMasks(masks)
+				if (updated > 0 || gainsSeeded > 0 || v17) {
 					this.log('info', `/Channels arrived (${count} tracks, ${updated} name updates, ${gainsSeeded} fader values)`)
-					// Names feed the action/feedback pickers; faders only feed variables.
+					// Names (and group counts) feed the action/feedback pickers; the rest only variables.
 					if (updated > 0) {
 						this.updateActions()
 						this.updateFeedbacks()
+						this.updatePresets()
 					}
+					if (v17) this.checkFeedbacks('channelMute', 'routeAssigned')
 					this.updateVariables()
 				}
 				break
@@ -779,8 +965,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const args = m.args
 				const vuValues: Record<string, string> = {}
 				for (let i = 1; i + 3 < args.length; i += 4) {
-					const g = args[i].type === 'i' ? (args[i].value as number) : null
-					const ch = args[i + 1].type === 'i' ? (args[i + 1].value as number) : null
+					const wg = args[i].type === 'i' ? (args[i].value as number) : null
+					const wch = args[i + 1].type === 'i' ? (args[i + 1].value as number) : null
+					const [g, ch] = wg == null || wch == null ? [null, null] : this.auxMap.fromWire(wg, wch)
 					const sub = args[i + 2].type === 'i' ? (args[i + 2].value as number) : null
 					const db = args[i + 3].type === 'f' ? (args[i + 3].value as number) : null
 					if (g == null || ch == null || sub == null || db == null) continue
@@ -799,20 +986,23 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			case '/Aux/Tracks': {
 				// Reply to /Get/Aux/Tracks: first int is the aux count, then per aux: (idx, group, name).
 				// Captured live — always arrives during handshake.
+				//   v16: (combined, 2, name) for every aux.
+				//   v17: FX = (0.., 2, name), Monitors = (0.., 25, name). The list ORDER is still
+				//        the combined aux index the send plane uses — see aux-map.ts.
 				const count = intArg(m, 0)
 				if (count == null) break
-				const names: string[] = []
-				for (let i = 1; i + 2 < m.args.length; i += 3) {
-					const nameArg = m.args[i + 2]
-					if (nameArg?.type === 's') names.push(nameArg.value)
-				}
-				const changed = this.detected.auxes !== count
+				const entries = parseAuxTracks(m.args)
+				const names = entries.map((e) => e.name)
+				const changed = this.detected.auxes !== count || (this.detected.auxNames ?? []).join('|') !== names.join('|')
+				this.auxMap.set(entries)
 				this.detected.auxes = count
 				this.detected.auxNames = names
 				if (changed) {
+					const mons = entries.filter((e) => e.group === 25).length
 					this.log(
 						'info',
-						`LV1 reports ${count} aux buses (${names.slice(0, 4).join(', ')}${names.length > 4 ? '…' : ''})`,
+						`LV1 reports ${count} aux buses (${names.slice(0, 4).join(', ')}${names.length > 4 ? '…' : ''})` +
+							(mons ? ` — ${count - mons} FX + ${mons} Monitor (v17 addressing)` : ''),
 					)
 					this.updateActions()
 					this.updateFeedbacks()
@@ -871,7 +1061,13 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					for (let e = 0; e < entryCount && idx + 1 < args.length; e++) {
 						const g = args[idx++]?.value as number
 						const ch = args[idx++]?.value as number
-						entries.push(g === -1 && ch === -1 ? null : { group: g, ch })
+						if (g === -1 && ch === -1) {
+							entries.push(null)
+						} else {
+							// v17 Monitor layer entries are (25, local) — count them as auxes.
+							const [tg, tc] = this.auxMap.fromWire(g, ch)
+							entries.push({ group: tg, ch: tc })
+						}
 					}
 					layers.push({ name, entries })
 				}
@@ -978,6 +1174,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				name: null,
 				pan: 0,
 				width: 1,
+				balance: 0,
+				stereo: false,
 				inGain: null,
 				trim: null,
 				polarity: null,
@@ -991,6 +1189,41 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	/** Optimistic update used by actions BEFORE the /Notify echoes back. Keeps the
 	 *  toggle-from-current-state logic correct on rapid presses and lets feedbacks
 	 *  flip immediately without waiting for the round-trip. */
+	/** Replace the bitmask-covered route state of each strip with what /Channels says. */
+	private seedRoutesFromMasks(masks: Array<{ g: number; ch: number; mask: bigint }>): void {
+		for (const { g, ch, mask } of masks) {
+			const prefix = `${g}.${ch}>`
+			for (const key of [...this.routes.keys()]) {
+				if (!key.startsWith(prefix)) continue
+				const destGroup = Number(key.slice(prefix.length).split('.')[0])
+				if (MASK_GROUPS.has(destGroup)) this.routes.delete(key)
+			}
+			for (const dest of decodeRouteMask(mask)) this.routes.set(routeKey(g, ch, dest), true)
+		}
+	}
+
+	/** Route state as last reported by the LV1. undefined = never reported. */
+	routeState(srcGroup: number, srcCh: number, destGroup: number, destIdx: number): boolean | undefined {
+		return this.routes.get(routeKey(srcGroup, srcCh, { group: destGroup, idx: destIdx }))
+	}
+
+	/** Optimistic route update from an action — the LV1 echoes the real state back. */
+	setRouteState(srcGroup: number, srcCh: number, destGroup: number, destIdx: number, on: boolean): void {
+		this.routes.set(routeKey(srcGroup, srcCh, { group: destGroup, idx: destIdx }), on)
+		this.checkFeedbacks('routeAssigned')
+	}
+
+	/** Ask the LV1 to re-send /Aux/Tracks + /Channels. A repeated /handshake does
+	 *  exactly that (verified live, v17) and is otherwise harmless. */
+	requestChannels(): void {
+		if (!this.osc?.isConnected()) return
+		this.osc.send('/handshake', [
+			{ type: 'i', value: 1 },
+			{ type: 'i', value: -1 },
+			{ type: 'i', value: 1 },
+		])
+	}
+
 	applyChannelDelta(group: number, ch: number, delta: Partial<ChannelState>): void {
 		const s = this.ensureChannel(group, ch)
 		Object.assign(s, delta)
@@ -1007,6 +1240,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (delta.gain != null) pushTrackVariable(this, group, ch, 'gain')
 		if (delta.pan != null) pushTrackVariable(this, group, ch, 'pan')
 		if (delta.width != null) pushTrackVariable(this, group, ch, 'width')
+		if (delta.balance != null) pushTrackVariable(this, group, ch, 'balance')
 		if (delta.name != null) pushTrackVariable(this, group, ch, 'name')
 		if (delta.polarity != null) {
 			pushTrackVariable(this, group, ch, 'polarity')
@@ -1127,7 +1361,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.log('warn', `send(${address}) dropped — not connected`)
 			return
 		}
-		this.osc.send(address, args)
+		// Auxes are (2, combined) inside the module; v17 Monitors go out as (25, local).
+		this.osc.send(address, this.auxMap.translateOutgoing(address, args))
 	}
 }
 

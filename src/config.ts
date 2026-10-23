@@ -9,6 +9,8 @@ export interface ModuleConfig {
 	host: string
 	/** Manual override port. Used if `selected` is empty. 0 = auto-discover the port for `host`. */
 	port: number
+	/** Open a second, recorder-type connection to read the I/O patch (/Notify/IOConnections). */
+	readIoPatch?: boolean
 }
 
 export function GetConfigFields(): SomeCompanionConfigField[] {
@@ -92,6 +94,16 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			default: 0,
 			min: 0,
 			max: 65535,
+		},
+		{
+			type: 'checkbox',
+			id: 'readIoPatch',
+			label: 'Read I/O patch (experimental, eMotion LV1 v17+)',
+			tooltip:
+				'Opens a second connection that registers like Waves Tracks Live — the only client type the LV1 sends its I/O patch to. ' +
+				'Fills the *_patch variables. It shows up on the LV1 as an extra recorder connection.',
+			width: 12,
+			default: false,
 		},
 	]
 }

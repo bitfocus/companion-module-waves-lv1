@@ -1,6 +1,6 @@
 {
 	"name": "companion-module-waves-lv1",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"main": "dist/main.js",
 	"type": "module",
 	"scripts": {
@@ -11,7 +11,8 @@
 		"build:main": "tsc -p tsconfig.build.json",
 		"dev": "tsc -p tsconfig.build.json --watch",
 		"lint:raw": "eslint",
-		"lint": "yarn lint:raw ."
+		"lint": "yarn lint:raw .",
+		"test": "node --test tests/*.test.ts"
 	},
 	"license": "MIT",
 	"repository": {

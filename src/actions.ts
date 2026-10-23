@@ -28,6 +28,8 @@ import {
 	resolveNumberAsync,
 	resolveStateAsync,
 	CUSTOM_EXPR,
+	buildRouteDestOptions,
+	resolveRouteDest,
 } from './tracks.js'
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
@@ -122,6 +124,17 @@ export function UpdateActions(self: LV1Instance): void {
 		'on',
 	)
 
+	const routeState = buildStateField(
+		'state',
+		[
+			{ id: 'on', label: 'Assign (on)' },
+			{ id: 'off', label: 'Unassign (off)' },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
+	const routeDestOptions = buildRouteDestOptions(self)
+
 	const dbField = (id = 'db', label = 'dB', def = 0) =>
 		buildNumberExprField(id, label, def, 'dB value: −144..+10 (−144 = mute, 0 = unity). Variables OK.')
 	const panField = (id = 'value', label = 'Pan (−1 = full L, +1 = full R)', def = 0) =>
@@ -192,6 +205,49 @@ export function UpdateActions(self: LV1Instance): void {
 				const v = await resolveNumberAsync(a.options, 'value', context, 1)
 				self.applyChannelDelta(group, ch, { width: v })
 				self.send('/Set/Track/Pan/Width', [intCh(group), intCh(ch), { type: 'd', value: v }])
+			},
+		},
+
+		balance: {
+			name: 'Channel: Stereo balance',
+			description: 'Balance of a stereo strip (−1 = left, +1 = right). Verified on eMotion LV1 v17.',
+			options: [
+				...trackPicker,
+				buildNumberExprField('value', 'Balance (−1 = L, +1 = R)', 0, 'Balance value −1..+1. Variables OK.'),
+			],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const v = await resolveNumberAsync(a.options, 'value', context, 0)
+				self.applyChannelDelta(group, ch, { balance: v })
+				self.send('/Set/Track/Pan/Balance', [intCh(group), intCh(ch), { type: 'd', value: v }])
+			},
+		},
+
+		route: {
+			name: 'Channel: Internal route (Patch > Internal)',
+			description:
+				'Assign a track to a Group, Aux (send on), DCA/Link, mute group (membership) or LR / Center / Mono. ' +
+				'Needs eMotion LV1 v17 or newer — v16 ignores this command.',
+			options: [...trackPicker, ...routeDestOptions, ...routeState],
+			callback: async (a, context) => {
+				const { group, ch } = await resolveTrackAsync(a.options, context)
+				const dest = await resolveRouteDest(a.options, context)
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
+				const current = self.routeState(group, ch, dest.group, dest.idx) ?? false
+				const on = mode === 'on' ? true : mode === 'off' ? false : !current
+				self.setRouteState(group, ch, dest.group, dest.idx, on)
+				if (dest.group === 2) {
+					// Aux routes are send-on states — see routing.ts ROUTE_KINDS.
+					self.send('/Set/Aux/Send/On', [intCh(group), intCh(ch), intCh(dest.idx), { type: on ? 'T' : 'F' }])
+				} else {
+					self.send('/SetInternalAsgn', [
+						intCh(group),
+						intCh(ch),
+						intCh(dest.group),
+						intCh(dest.idx),
+						intCh(on ? 1 : 0),
+					])
+				}
 			},
 		},
 
@@ -713,10 +769,11 @@ export function UpdateActions(self: LV1Instance): void {
 
 		refreshState: {
 			name: 'State: Re-request layers + aux tracks',
-			description: 'Re-requests layer + aux info from the LV1.',
+			description: 'Re-requests layer, aux and channel info (names, faders, mutes, routes) from the LV1.',
 			options: [],
 			callback: async () => {
 				self.requestStateRefresh()
+				self.requestChannels()
 			},
 		},
 

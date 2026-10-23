@@ -8,13 +8,14 @@
 //
 // Channel choices per group come from:
 //   group=0 (Input)   → /Notify/Layers inputLayers, or fallback to effectiveChannels()
-//   group=1 (Groups)  → 8 fixed (LV1 always has 8 group buses)
+//   group=1 (Groups)  → /Channels count (8 or 16), default 8
 //   group=2 (Aux/FX)  → /Aux/Tracks names, or auxes count
-//   group=6 (Matrix)  → 8 fixed
-//   group=12 (DCA)    → 8 fixed
+//   group=6 (Matrix)  → /Channels count, default 8
+//   group=12 (DCA)    → /Channels count (16 "Link" tracks on v17), default 8
 
 import type { DropdownChoice, CompanionInputFieldDropdown, CompanionInputFieldTextInput } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { ROUTE_KINDS } from './routing.js'
 
 /** Sentinel used as a dropdown entry to switch that field into "custom
  *  expression" mode. A paired `<field>_expr` textinput becomes visible and
@@ -90,6 +91,14 @@ export const GROUP_CHOICES: DropdownChoice[] = [
 	{ id: 12, label: '12 — DCA' },
 ]
 
+/** Number of Group (1) / Matrix (6) / DCA (12) tracks. Read from /Channels when it
+ *  has arrived — v17 reports 16 DCA/Link tracks and up to 16 groups — else the
+ *  historic fixed 8. */
+export function busCount(self: LV1Instance, group: 1 | 6 | 12): number {
+	const n = self.detected.groupCounts?.[group]
+	return n && n > 0 && n <= 64 ? n : 8
+}
+
 /** Per-group channel dropdown. Caller uses `isVisible: o => Number(o.group) === <g>`. */
 export function channelsFor(self: LV1Instance, group: number): DropdownChoice[] {
 	const named = (idx0: number, fallback: string): string => {
@@ -107,7 +116,7 @@ export function channelsFor(self: LV1Instance, group: number): DropdownChoice[] 
 		}
 		case 1: {
 			const out: DropdownChoice[] = []
-			for (let i = 0; i < 8; i++) out.push({ id: i + 1, label: named(i, 'Group') })
+			for (let i = 0; i < busCount(self, 1); i++) out.push({ id: i + 1, label: named(i, 'Group') })
 			return out
 		}
 		case 2: {
@@ -118,12 +127,12 @@ export function channelsFor(self: LV1Instance, group: number): DropdownChoice[] 
 		}
 		case 6: {
 			const out: DropdownChoice[] = []
-			for (let i = 0; i < 8; i++) out.push({ id: i + 1, label: named(i, 'Mtx') })
+			for (let i = 0; i < busCount(self, 6); i++) out.push({ id: i + 1, label: named(i, 'Mtx') })
 			return out
 		}
 		case 12: {
 			const out: DropdownChoice[] = []
-			for (let i = 0; i < 8; i++) out.push({ id: i + 1, label: named(i, 'DCA') })
+			for (let i = 0; i < busCount(self, 12); i++) out.push({ id: i + 1, label: named(i, 'DCA') })
 			return out
 		}
 		default:
@@ -437,25 +446,87 @@ export async function resolveStateAsync(
 	return fallback
 }
 
+/** Destination fields shared by the "Internal route" action and feedback. */
+export function buildRouteDestOptions(
+	self: LV1Instance,
+	forAction = true,
+): Array<CompanionInputFieldDropdown | CompanionInputFieldTextInput> {
+	const kinds = ROUTE_KINDS.filter((k) => !forAction || !k.feedbackOnly)
+	const singles = ROUTE_KINDS.filter((k) => k.single).map((k) => k.id)
+	return [
+		{
+			id: 'destKind',
+			type: 'dropdown',
+			label: 'Destination',
+			default: 'grp',
+			choices: kinds.map((k) => ({ id: k.id, label: k.label })),
+		},
+		{
+			id: 'destIdx',
+			type: 'textinput',
+			label: 'Destination number (1-based)',
+			tooltip: 'e.g. 1 = Group 1 / Matrix 1 / DCA 1 / mute group 1. Variables OK.',
+			default: '1',
+			useVariables: true,
+			isVisible: (opts: Record<string, unknown>, data: { hide: string[] }) =>
+				!data.hide.includes(String(opts.destKind)),
+			isVisibleData: { hide: [...singles, 'aux'] },
+		},
+		{
+			id: 'destAux',
+			type: 'dropdown',
+			label: 'Aux (FX / Monitor)',
+			default: 1,
+			choices: withCustomOption(channelsFor(self, 2)),
+			isVisible: (opts: Record<string, unknown>) => opts.destKind === 'aux',
+		},
+		{
+			id: 'destAux_expr',
+			type: 'textinput',
+			label: 'Aux (expression)',
+			tooltip: '1-based aux index as listed above (FX first, then Monitors).',
+			default: '',
+			useVariables: true,
+			isVisible: (opts: Record<string, unknown>, data: { custom: string }) =>
+				opts.destKind === 'aux' && opts.destAux === data.custom,
+			isVisibleData: { custom: CUSTOM_EXPR },
+		},
+	]
+}
+
+/** Resolve the route destination to module-internal (group, 0-based index).
+ *  Auxes come back as (2, combined index); AuxMap translates them on send. */
+export async function resolveRouteDest(
+	options: Record<string, unknown>,
+	context: ExprContext,
+): Promise<{ group: number; idx: number }> {
+	const kind = ROUTE_KINDS.find((k) => k.id === options.destKind) ?? ROUTE_KINDS[0]
+	if (kind.single) return { group: kind.group, idx: 0 }
+	if (kind.id === 'aux') return { group: kind.group, idx: await resolveIndexAsync(options, 'destAux', context, 0) }
+	const n = Math.round(await resolveNumberAsync(options, 'destIdx', context, 1))
+	return { group: kind.group, idx: Math.max(0, n - 1) }
+}
+
 // ─── Track enumeration (used by variables.ts) ────────────────────────────────
 
 /** Returns the list of every real (group, ch) track on this LV1. Always includes
- *  the standard fixed-count groups (Groups=8, Matrix=8, DCA=8, masters=1) regardless
- *  of whether /Notify/Layers has confirmed them — so variables register up front. */
+ *  the standard groups (Groups / Matrix / DCA — 8 each until /Channels says otherwise,
+ *  masters=1) regardless of whether /Notify/Layers has confirmed them — so variables
+ *  register up front. */
 export function enumerateTracks(self: LV1Instance): Array<{ group: number; ch: number }> {
 	const out: Array<{ group: number; ch: number }> = []
 	const inputCount = countInputs(self)
 	const auxCount = self.effectiveAuxes()
 	for (let i = 0; i < inputCount; i++) out.push({ group: 0, ch: i })
-	for (let i = 0; i < 8; i++) out.push({ group: 1, ch: i })
+	for (let i = 0; i < busCount(self, 1); i++) out.push({ group: 1, ch: i })
 	for (let i = 0; i < auxCount; i++) out.push({ group: 2, ch: i })
 	out.push({ group: 3, ch: 0 }) // LR
 	out.push({ group: 4, ch: 0 }) // Center
 	out.push({ group: 5, ch: 0 }) // Mono
-	for (let i = 0; i < 8; i++) out.push({ group: 6, ch: i })
+	for (let i = 0; i < busCount(self, 6); i++) out.push({ group: 6, ch: i })
 	out.push({ group: 7, ch: 0 }) // Cue
 	out.push({ group: 8, ch: 0 }) // TalkBack
-	for (let i = 0; i < 8; i++) out.push({ group: 12, ch: i })
+	for (let i = 0; i < busCount(self, 12); i++) out.push({ group: 12, ch: i })
 	return out
 }
 

@@ -25,6 +25,11 @@ export function UpdateVariables(self: LV1Instance): void {
 		defs.push({ variableId: `${slug}_trim`, name: `${label} — digital trim (read-only)` })
 		defs.push({ variableId: `${slug}_pan`, name: `${label} — pan (-1..+1)` })
 		defs.push({ variableId: `${slug}_width`, name: `${label} — stereo width (0..1)` })
+		defs.push({ variableId: `${slug}_balance`, name: `${label} — stereo balance (-1..+1)` })
+		defs.push({ variableId: `${slug}_stereo`, name: `${label} — stereo strip (on/off, v17+)` })
+		if (self.config.readIoPatch) {
+			defs.push({ variableId: `${slug}_patch`, name: `${label} — I/O patch (experimental)` })
+		}
 		defs.push({ variableId: `${slug}_vu`, name: `${label} — VU meter, L/mono (dB, ~0.8 Hz)` })
 		defs.push({ variableId: `${slug}_vu_r`, name: `${label} — VU meter, R of stereo (dB)` })
 		defs.push({ variableId: `${slug}_color`, name: `${label} — color (#RRGGBB)` })
@@ -39,6 +44,10 @@ export function UpdateVariables(self: LV1Instance): void {
 	defs.push({ variableId: 'scene_count', name: 'Total scenes' })
 	defs.push({ variableId: 'channels_total', name: 'Total input channels (detected)' })
 	defs.push({ variableId: 'auxes_total', name: 'Total aux buses (detected)' })
+	defs.push({ variableId: 'console_version', name: 'eMotion LV1 version (e.g. v.17.6.26.456)' })
+	if (self.config.readIoPatch) {
+		defs.push({ variableId: 'io_patch_connections', name: 'I/O patch — number of connections reported (experimental)' })
+	}
 	defs.push({ variableId: 'flip_active', name: 'Flip-to-faders active (on/off)' })
 	defs.push({ variableId: 'flip_aux', name: 'Flipped aux 1-based (0 = none)' })
 	defs.push({ variableId: 'flip_group', name: 'Flipped target group (3=LR if none)' })
@@ -83,6 +92,9 @@ export function pushAll(self: LV1Instance): void {
 		values[`${slug}_trim`] = s?.trim != null ? s.trim.toFixed(1) : ''
 		values[`${slug}_pan`] = s?.pan != null ? s.pan.toFixed(2) : ''
 		values[`${slug}_width`] = s?.width != null ? s.width.toFixed(2) : ''
+		values[`${slug}_balance`] = s?.balance != null ? s.balance.toFixed(2) : ''
+		values[`${slug}_stereo`] = s?.stereo ? 'on' : 'off'
+		if (self.config.readIoPatch) values[`${slug}_patch`] = (self.ioPatch.get(`${group}.${ch}`) ?? []).join(' + ')
 		values[`${slug}_color`] = s?.color ? toHex(s.color) : ''
 		// Blank, NOT 'off', when the console has not told us. See ChannelState.phantom.
 		values[`${slug}_polarity`] = s?.polarity == null ? '' : s.polarity ? 'on' : 'off'
@@ -98,6 +110,7 @@ export function pushAll(self: LV1Instance): void {
 	values['scene_count'] = self.scenes.size
 	values['channels_total'] = self.effectiveChannels()
 	values['auxes_total'] = self.effectiveAuxes()
+	if (self.config.readIoPatch) values['io_patch_connections'] = self.ioPatchRows ?? ''
 	// Flip state — same logic as pushFlipVariables() in main.ts (kept in sync).
 	const t = self.currentFlipTarget
 	values['flip_active'] = t ? 'on' : 'off'
@@ -131,7 +144,19 @@ export function pushTrack(
 	self: LV1Instance,
 	group: number,
 	ch: number,
-	prop: 'mute' | 'solo' | 'gain' | 'ingain' | 'trim' | 'pan' | 'width' | 'name' | 'color' | 'polarity' | 'phantom',
+	prop:
+		| 'mute'
+		| 'solo'
+		| 'gain'
+		| 'ingain'
+		| 'trim'
+		| 'pan'
+		| 'width'
+		| 'balance'
+		| 'name'
+		| 'color'
+		| 'polarity'
+		| 'phantom',
 ): void {
 	const slug = trackSlug(group, ch)
 	const s = self.channels.get(`${group}.${ch}`)
@@ -144,6 +169,7 @@ export function pushTrack(
 	if (prop === 'trim') v[`${slug}_trim`] = s.trim != null ? s.trim.toFixed(1) : ''
 	if (prop === 'pan') v[`${slug}_pan`] = s.pan != null ? s.pan.toFixed(2) : ''
 	if (prop === 'width') v[`${slug}_width`] = s.width != null ? s.width.toFixed(2) : ''
+	if (prop === 'balance') v[`${slug}_balance`] = s.balance.toFixed(2)
 	if (prop === 'name') v[`${slug}_name`] = s.name ?? ''
 	if (prop === 'color') v[`${slug}_color`] = s.color ? toHex(s.color) : ''
 	if (prop === 'polarity') v[`${slug}_polarity`] = s.polarity == null ? '' : s.polarity ? 'on' : 'off'

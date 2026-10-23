@@ -39,7 +39,7 @@ troubleshooting table in [`companion/HELP.md`](companion/HELP.md).
 | Auto-discovery | Custom Waves `/zDNS` multicast — finds the LV1 on the LAN with no config                                 |
 | Mute / Solo    | Any track (Input / Group / Aux / LR / C / M / Matrix / Cue / TB / DCA), with optimistic local feedback   |
 | Faders         | Set / fade (linear ramp in dB, 0-60 s, cancellable), per-track + per-send                                |
-| Pan & Width    | Channel pan, stereo width, send pan                                                                      |
+| Pan & Width    | Channel pan, stereo width, stereo balance, send pan                                                      |
 | Sends          | On / Off / Toggle / gain / pan, with focus-an-aux (`/Set/AuxId`)                                         |
 | Preamp         | Input gain, digital trim, +48 V, polarity                                                                |
 | Plugins        | Enable / disable EQ / Filter / Comp / DeEsser / Dyn / Gate / Leveler / Limiter                           |
@@ -48,6 +48,8 @@ troubleshooting table in [`companion/HELP.md`](companion/HELP.md).
 | Surface        | User keys (1-16), mute groups (1-8), tap tempo, rename                                                   |
 | Feedbacks      | Live mirror of mute / solo / send-on / mute-group / scene + meter > threshold + channel color            |
 | Variables      | Per-track name / mute / solo / gain / color; per-scene name; global tempo, scene index/name, mute groups |
+| Routing        | Patch > Internal route on / off / toggle + feedback (eMotion LV1 v17+)                                   |
+| eMotion v17    | v16 and v17 handled automatically — Monitor buses, 16 DCA/Links, 16 groups; experimental I/O patch       |
 | Raw            | Send any OSC address with typed args for what's not yet wrapped                                          |
 
 See `companion/HELP.md` for the full reference.

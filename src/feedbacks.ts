@@ -24,6 +24,8 @@ import {
 	resolveIndexAsync,
 	resolveNumberAsync,
 	CUSTOM_EXPR,
+	buildRouteDestOptions,
+	resolveRouteDest,
 } from './tracks.js'
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
@@ -44,6 +46,35 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 	)
 
 	const feedbacks: CompanionFeedbackDefinitions = {
+		routeAssigned: {
+			type: 'boolean',
+			name: 'Channel internally routed to destination',
+			description:
+				'True when the LV1 reports the track assigned to the destination (Patch > Internal). ' +
+				'Group / Matrix / DCA / mute group / LR / C / M are read on connect (eMotion LV1 v17, 8-group mixer modes); ' +
+				'everything updates live as routes change.',
+			defaultStyle: { bgcolor: combineRgb(0, 110, 200), color: combineRgb(255, 255, 255) },
+			options: [...trackPicker, ...buildRouteDestOptions(self, false)],
+			callback: async (fb, context) => {
+				const { group, ch } = await resolveTrackAsync(fb.options, context)
+				const dest = await resolveRouteDest(fb.options, context)
+				return self.routeState(group, ch, dest.group, dest.idx) === true
+			},
+		},
+
+		channelHasPatch: {
+			type: 'boolean',
+			name: 'Channel has an I/O patch (experimental)',
+			description:
+				'True when the LV1 reports an I/O connection for the track. Needs "Read I/O patch" enabled in the connection settings.',
+			defaultStyle: { bgcolor: combineRgb(0, 120, 60), color: combineRgb(255, 255, 255) },
+			options: trackPicker,
+			callback: async (fb, context) => {
+				const { group, ch } = await resolveTrackAsync(fb.options, context)
+				return (self.ioPatch.get(`${group}.${ch}`)?.length ?? 0) > 0
+			},
+		},
+
 		channelMute: {
 			type: 'boolean',
 			name: 'Channel muted',

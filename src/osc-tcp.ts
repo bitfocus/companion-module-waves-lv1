@@ -21,7 +21,9 @@ import { encodeMessage, decodePacket, OscArg, OscMessage } from './osc.js'
 const DEFAULT_HEADER = Buffer.from([0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00])
 const HEADER_LEN = 8
 
-export type HandshakeStyle = 'myfoh' | 'mymon'
+/** Client type the LV1 sees (3rd /handshake int): myfoh = 1, mymon = 0, tracks = 6 (Waves
+ *  Tracks Live — the only type the desk sends /Notify/IOConnections to). */
+export type HandshakeStyle = 'myfoh' | 'mymon' | 'tracks'
 
 export interface OscTcpClientOptions {
 	host: string
@@ -190,16 +192,19 @@ export class OscTcpClient extends EventEmitter {
 	// Run the registration handshake. Emits 'registered' on success.
 	async register(): Promise<void> {
 		try {
-			if (this.handshakeStyle === 'myfoh') {
+			if (this.handshakeStyle === 'myfoh' || this.handshakeStyle === 'tracks') {
 				// iPad MyFOH style: batch /handshake + /device_name in one TCP write.
 				// MyRemote ControlPanel shows TYPE = MyFOH.
+				// Tracks Live 2 (disassembled, v17) uses the same shape with client type 6
+				// and a third /device_name string.
+				const tracks = this.handshakeStyle === 'tracks'
 				this.sendBatch([
 					{
 						address: '/handshake',
 						args: [
 							{ type: 'i', value: 1 },
 							{ type: 'i', value: -1 },
-							{ type: 'i', value: 1 },
+							{ type: 'i', value: tracks ? 6 : 1 },
 						],
 					},
 					{
@@ -207,6 +212,7 @@ export class OscTcpClient extends EventEmitter {
 						args: [
 							{ type: 's', value: this.deviceName },
 							{ type: 's', value: this.uuid },
+							...(tracks ? [{ type: 's' as const, value: this.deviceName }] : []),
 						],
 					},
 				])
@@ -220,7 +226,7 @@ export class OscTcpClient extends EventEmitter {
 					this.emit('error', new Error('No /handshake ACK after 3 s'))
 					return
 				}
-				this.emit('registered', { style: 'myfoh' })
+				this.emit('registered', { style: this.handshakeStyle })
 			} else {
 				// iPhone MyMon style. MyRemote ControlPanel shows TYPE = MyMon.
 				const ip = this.localIP()
