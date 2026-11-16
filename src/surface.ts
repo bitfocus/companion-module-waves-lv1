@@ -6,7 +6,7 @@ import path from 'node:path'
 import type { ControlAddress } from './surface-client.js'
 
 /** Version of the driver installer shipped with this module (surface/CompanionSurface-Setup.exe). */
-export const SURFACE_DRIVER_VERSION = '0.1.2'
+export const SURFACE_DRIVER_VERSION = '0.1.3'
 export const SURFACE_DEFAULT_PORT = 9460
 export const SURFACE_INSTALLER = 'CompanionSurface-Setup.exe'
 
