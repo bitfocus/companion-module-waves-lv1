@@ -335,8 +335,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (this.config.host?.trim()) host = this.config.host.trim()
 		if (this.config.port > 0) port = this.config.port
 
+		// Companion Surface mode only needs the desk computer's IP: the driver has a fixed port.
+		const surfaceMode = this.config.mode === 'surface'
+
 		// Priority 3: if we still have no host or no port, try a one-shot discovery.
-		if (!host || !port) {
+		if (!host || (!port && !surfaceMode)) {
 			this.updateStatus(InstanceStatus.Connecting, 'Discovering LV1…')
 			this.log('info', `Running zDNS discovery (host filter: ${host || 'none'})`)
 			const scan = discover({
@@ -377,6 +380,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.log('info', `Discovered ${chosen.host} at ${host}:${port}`)
 		}
 
+		if (surfaceMode) {
+			// Standalone: everything goes through the driver, MyRemote is never opened.
+			if (!host) {
+				this.updateStatus(InstanceStatus.BadConfig, 'No LV1 address available after discovery')
+				return
+			}
+			this.lastHost = host
+			this.startSurfaceClient(host)
+			return
+		}
+
 		if (!host || !port) {
 			this.updateStatus(InstanceStatus.BadConfig, 'No host or port available after discovery')
 			return
@@ -394,7 +408,6 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.bindOscEvents(this.osc)
 		this.osc.connect()
 		if (this.config.readIoPatch) this.startIoPatchClient(host, port)
-		if (this.config.mode === 'surface') this.startSurfaceClient(host)
 	}
 
 	// ─── Companion Surface driver ─────────────────────────────────────────
@@ -407,6 +420,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		const rejected = 'Companion Surface rejected the password'
 		let failing = false
 		this.surfaceProblem = `Companion Surface not reachable on ${host}:${port} — is it installed and added in eMotion's Controls panel?`
+		this.updateStatus(InstanceStatus.Connecting, `Connecting to Companion Surface on ${host}:${port}`)
 		s.on('ready', (version: string | null) => {
 			failing = false
 			this.surfaceAsked.clear()
@@ -433,6 +447,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		s.on('error', (err: Error) => {
 			// Warn once per outage; the retries after that only go to debug.
 			this.log(failing ? 'debug' : 'warn', `Companion Surface ${host}:${port}: ${err.message} — retrying`)
+			if (!failing) this.reportStatus()
 			failing = true
 		})
 		s.on('close', () => {
@@ -461,11 +476,15 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		}, 30)
 	}
 
-	/** Connection status: MyRemote first, then the driver when the mode needs it. */
+	/** Connection status: the driver in Companion Surface mode, MyRemote otherwise. */
 	private reportStatus(): void {
-		if (!this.myRemoteOk) return
-		if (this.config.mode !== 'surface' || !this.surfaceProblem) this.updateStatus(InstanceStatus.Ok)
-		else this.updateStatus(InstanceStatus.UnknownWarning, this.surfaceProblem)
+		if (this.config.mode === 'surface') {
+			if (!this.surfaceProblem) this.updateStatus(InstanceStatus.Ok)
+			else if (this.surface?.isReady()) this.updateStatus(InstanceStatus.UnknownWarning, this.surfaceProblem)
+			else this.updateStatus(InstanceStatus.ConnectionFailure, this.surfaceProblem)
+			return
+		}
+		if (this.myRemoteOk) this.updateStatus(InstanceStatus.Ok)
 	}
 
 	/** Last value the driver reported for a control; asks for it once when unknown. */

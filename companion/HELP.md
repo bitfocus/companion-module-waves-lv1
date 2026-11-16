@@ -260,10 +260,10 @@ Each one has a feedback that follows changes made on the desk.
    and save. Its gear button shows the computer's addresses, the connected
    Companion and the port / password settings.
 
-The driver listens on TCP port 9460. MyRemote stays connected for everything
-else, so keep MyRemote enabled too. If the driver on the desk is older than
-the one in this module, the connection status says so: install it again from
-the same page.
+The driver listens on TCP port 9460. In this mode the module talks only to
+Companion Surface: MyRemote is not used and does not need to be enabled. If the
+driver on the desk is older than the one in this module, the connection status
+says so: install it again from the same page.
 
 ## Auto-discovery
 

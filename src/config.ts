@@ -82,7 +82,7 @@ export function GetConfigFields(label = ''): SomeCompanionConfigField[] {
 			isVisibleExpression: surfaceOnly,
 			value:
 				'Companion Surface is a control driver that runs inside eMotion LV1 and gives this module controls MyRemote does not have ' +
-				'(Talk, plugin slot and rack bypass, and more). MyRemote stays connected for everything else.\n\n' +
+				'(Talk, plugin slot and rack bypass, and more). In this mode the module talks only to Companion Surface; MyRemote is not used.\n\n' +
 				`To install it, open this page in a browser on the eMotion LV1 computer and run the installer: ` +
 				`http://<this Companion's IP>:8000${installPath}  (use your Companion web port if it is not 8000). ` +
 				'Then add "Companion Surface" in the eMotion Controls panel.',
