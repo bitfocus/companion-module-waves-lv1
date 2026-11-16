@@ -841,7 +841,6 @@ export function UpdateActions(self: LV1Instance): void {
 		},
 	}
 
-	if (self.config.mode === 'surface') Object.assign(actions, surfaceActions(self))
-
-	self.setActionDefinitions(actions)
+	// Companion Surface mode only offers what goes through the driver: MyRemote is not connected.
+	self.setActionDefinitions(self.config.mode === 'surface' ? surfaceActions(self) : actions)
 }

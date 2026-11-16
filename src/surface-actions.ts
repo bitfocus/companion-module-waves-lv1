@@ -54,7 +54,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 	const trackPicker: AnyOpt[] = buildTrackPicker(self, 'ch')
 	return {
 		surfaceTalk: {
-			name: 'Companion Surface: Talk Back TALK',
+			name: 'Talk Back: TALK',
 			description: 'Presses TALK exactly like the button in eMotion (Talk Back mic to the selected destinations).',
 			options: [
 				...buildStateField(
@@ -74,7 +74,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 		},
 
 		surfaceSlotBypass: {
-			name: 'Companion Surface: Plugin slot bypass',
+			name: 'Plugin: Slot bypass',
 			description: 'Bypass one plugin slot in a strip’s rack.',
 			options: [
 				...trackPicker,
@@ -97,7 +97,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 		},
 
 		surfaceRack: {
-			name: 'Companion Surface: Plugin rack In / Out',
+			name: 'Plugin: Rack In / Out',
 			description: 'Switch a strip’s whole plugin rack in or out.',
 			options: [
 				...trackPicker,
@@ -119,7 +119,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 		},
 
 		surfaceRawControl: {
-			name: 'Companion Surface: Set any control (advanced)',
+			name: 'Advanced: Set any control',
 			description:
 				'Writes one eMotion control by its raw address (track type, track, section group, section type / index, control id). ' +
 				'For controls that have no action yet.',
@@ -153,14 +153,14 @@ export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 	return {
 		surfaceTalk: {
 			type: 'boolean',
-			name: 'Companion Surface: TALK is on',
+			name: 'Talk Back: TALK is on',
 			defaultStyle: { bgcolor: combineRgb(200, 120, 0), color: combineRgb(255, 255, 255) },
 			options: [],
 			callback: () => self.surfaceBool(SurfaceControls.talk()),
 		},
 		surfaceSlotBypassed: {
 			type: 'boolean',
-			name: 'Companion Surface: Plugin slot bypassed',
+			name: 'Plugin: Slot bypassed',
 			defaultStyle: { bgcolor: combineRgb(180, 120, 0), color: combineRgb(255, 255, 255) },
 			options: [...trackPicker, slotField()],
 			callback: async (fb, context) => {
@@ -170,7 +170,7 @@ export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 		},
 		surfaceRackOut: {
 			type: 'boolean',
-			name: 'Companion Surface: Plugin rack is Out',
+			name: 'Plugin: Rack is Out',
 			defaultStyle: { bgcolor: combineRgb(180, 120, 0), color: combineRgb(255, 255, 255) },
 			options: trackPicker,
 			callback: async (fb, context) => {

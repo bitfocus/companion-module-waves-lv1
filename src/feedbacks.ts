@@ -303,7 +303,6 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		},
 	}
 
-	if (self.config.mode === 'surface') Object.assign(feedbacks, surfaceFeedbacks(self))
-
-	self.setFeedbackDefinitions(feedbacks)
+	// Companion Surface mode only offers what goes through the driver: MyRemote is not connected.
+	self.setFeedbackDefinitions(self.config.mode === 'surface' ? surfaceFeedbacks(self) : feedbacks)
 }

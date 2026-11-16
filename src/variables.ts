@@ -12,6 +12,11 @@ import { enumerateTracks, trackLabel, trackSlug } from './tracks.js'
 export { trackSlug }
 
 export function UpdateVariables(self: LV1Instance): void {
+	// These variables are filled from MyRemote; Companion Surface mode does not connect to it.
+	if (self.config.mode === 'surface') {
+		self.setVariableDefinitions([])
+		return
+	}
 	const defs: CompanionVariableDefinition[] = []
 
 	for (const { group, ch } of enumerateTracks(self)) {

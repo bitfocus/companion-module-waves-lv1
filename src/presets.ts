@@ -5,6 +5,11 @@ import { CompanionPresetDefinitions, combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
 
 export function UpdatePresets(self: LV1Instance): void {
+	// These presets use MyRemote actions; Companion Surface mode has none of them.
+	if (self.config.mode === 'surface') {
+		self.setPresetDefinitions({})
+		return
+	}
 	const presets: CompanionPresetDefinitions = {}
 
 	const chCount = self.effectiveChannels()
