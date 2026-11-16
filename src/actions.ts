@@ -31,6 +31,7 @@ import {
 	buildRouteDestOptions,
 	resolveRouteDest,
 } from './tracks.js'
+import { surfaceActions } from './surface-actions.js'
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
 
@@ -839,6 +840,8 @@ export function UpdateActions(self: LV1Instance): void {
 			},
 		},
 	}
+
+	if (self.config.mode === 'surface') Object.assign(actions, surfaceActions(self))
 
 	self.setActionDefinitions(actions)
 }

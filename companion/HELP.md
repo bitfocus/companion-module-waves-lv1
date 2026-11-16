@@ -236,6 +236,35 @@ against real SoundGrid I/O hardware yet (a Generic/virtual I/O reports an empty
 patch): if the variables stay empty with real I/O patched, please open an
 issue and attach the Companion log with debug messages on.
 
+## Companion Surface (optional driver)
+
+MyRemote only exposes part of the desk. **Companion Surface** is a control
+driver that runs inside eMotion LV1, like the LV1 Control or Mackie drivers,
+and lets this module reach controls MyRemote cannot:
+
+- **Talk Back TALK**, pressed exactly like the button in eMotion
+- **Plugin slot bypass** (slots 1-8) and **plugin rack In / Out** for any strip
+- **Set any control (advanced)**, by its raw eMotion address
+
+Each one has a feedback that follows changes made on the desk.
+
+### Installing it on the desk computer
+
+1. In the connection settings, set **Connect through** to **Companion Surface**.
+2. On the computer that runs eMotion LV1, open a browser at
+   `http://<Companion's IP>:8000/instance/<connection label>/surface`
+   (use your Companion web port if it is not 8000) and download the installer.
+   The page works without internet access.
+3. Close eMotion LV1 and run the installer (Windows).
+4. Start eMotion LV1, open the **Controls** panel, add **Companion Surface**
+   and save. Its gear button shows the computer's addresses, the connected
+   Companion and the port / password settings.
+
+The driver listens on TCP port 9460. MyRemote stays connected for everything
+else, so keep MyRemote enabled too. If the driver on the desk is older than
+the one in this module, the connection status says so: install it again from
+the same page.
+
 ## Auto-discovery
 
 The LV1 broadcasts `/zDNS` on UDP multicast **`225.1.1.1:13337`**. Standard

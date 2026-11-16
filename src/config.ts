@@ -1,6 +1,7 @@
 import { SomeCompanionConfigField } from '@companion-module/base'
 import { getDiscoveryCache, refreshDiscovery } from './discovery-cache.js'
 import { multicastInterfaces } from './zdns-discover.js'
+import { SURFACE_DEFAULT_PORT } from './surface.js'
 
 export interface ModuleConfig {
 	/** Encoded "ip:port" picked from the discovered-LV1s dropdown. Empty = use custom host/port. */
@@ -11,9 +12,16 @@ export interface ModuleConfig {
 	port: number
 	/** Open a second, recorder-type connection to read the I/O patch (/Notify/IOConnections). */
 	readIoPatch?: boolean
+	/** 'myremote' = MyRemote protocol only (default). 'surface' = also connect to the
+	 *  Companion Surface driver running inside eMotion LV1, which unlocks its actions. */
+	mode?: 'myremote' | 'surface'
+	/** TCP port of the Companion Surface driver (its .ini on the desk computer). */
+	surfacePort?: number
+	/** Password set in the Companion Surface .ini (blank = none). */
+	surfacePassword?: string
 }
 
-export function GetConfigFields(): SomeCompanionConfigField[] {
+export function GetConfigFields(label = ''): SomeCompanionConfigField[] {
 	const { entries, ageMs } = getDiscoveryCache()
 
 	// Kick off a fresh discovery in the background every time the config dialog opens.
@@ -51,7 +59,52 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		})),
 	]
 
+	const installPath = `/instance/${encodeURIComponent(label || '<connection label>')}/surface`
+	const surfaceOnly = "$(options:mode) == 'surface'"
+
 	return [
+		{
+			type: 'dropdown',
+			id: 'mode',
+			label: 'Connect through',
+			width: 12,
+			default: 'myremote',
+			choices: [
+				{ id: 'myremote', label: 'MyRemote' },
+				{ id: 'surface', label: 'Companion Surface (driver inside eMotion LV1)' },
+			],
+		},
+		{
+			type: 'static-text',
+			id: 'surface_help',
+			label: 'Companion Surface',
+			width: 12,
+			isVisibleExpression: surfaceOnly,
+			value:
+				'Companion Surface is a control driver that runs inside eMotion LV1 and gives this module controls MyRemote does not have ' +
+				'(Talk, plugin slot and rack bypass, and more). MyRemote stays connected for everything else.\n\n' +
+				`To install it, open this page in a browser on the eMotion LV1 computer and run the installer: ` +
+				`http://<this Companion's IP>:8000${installPath}  (use your Companion web port if it is not 8000). ` +
+				'Then add "Companion Surface" in the eMotion Controls panel.',
+		},
+		{
+			type: 'number',
+			id: 'surfacePort',
+			label: 'Companion Surface port',
+			width: 6,
+			default: SURFACE_DEFAULT_PORT,
+			min: 1,
+			max: 65535,
+			isVisibleExpression: surfaceOnly,
+		},
+		{
+			type: 'textinput',
+			id: 'surfacePassword',
+			label: 'Companion Surface password (blank = none)',
+			width: 6,
+			default: '',
+			isVisibleExpression: surfaceOnly,
+		},
 		{
 			type: 'static-text',
 			id: 'discovery_status',

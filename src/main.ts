@@ -8,7 +8,14 @@
 // feedbacks can render without re-querying the LV1. The LV1 broadcasts every change
 // from any other client too, so we stay in sync automatically.
 
-import { InstanceBase, runEntrypoint, InstanceStatus, SomeCompanionConfigField } from '@companion-module/base'
+import {
+	InstanceBase,
+	runEntrypoint,
+	InstanceStatus,
+	SomeCompanionConfigField,
+	type CompanionHTTPRequest,
+	type CompanionHTTPResponse,
+} from '@companion-module/base'
 import { GetConfigFields, type ModuleConfig } from './config.js'
 import { UpdateActions } from './actions.js'
 import { UpdateFeedbacks } from './feedbacks.js'
@@ -24,6 +31,8 @@ import { trackSlug } from './tracks.js'
 import { AuxMap, parseAuxTracks } from './aux-map.js'
 import { MASK_GROUPS, decodeRouteMask, isTalkBackDest, routeKey } from './routing.js'
 import { parseIOConnections, rowLabel, rowTrack } from './io-connections.js'
+import { SurfaceClient, controlKey, type ControlAddress, type ControlUpdate } from './surface-client.js'
+import { SURFACE_DEFAULT_PORT, SURFACE_DRIVER_VERSION, compareVersions, surfaceInstallPage } from './surface.js'
 
 interface ChannelState {
 	muted: boolean
@@ -133,6 +142,18 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  so its multicast socket does not outlive the connection. */
 	private connectScan: DiscoverHandle | null = null
 
+	/** Companion Surface driver connection (config mode 'surface'). */
+	public surface: SurfaceClient | null = null
+	/** Last value of every eMotion control the driver reported, key = controlKey(). */
+	public surfaceControls = new Map<string, ControlUpdate>()
+	/** Controls already requested with getx on the current driver connection. */
+	private surfaceAsked = new Set<string>()
+	/** Why the driver side is not usable, shown as the connection status. null = fine. */
+	private surfaceProblem: string | null = null
+	private surfaceFeedbackTimer: NodeJS.Timeout | null = null
+	/** The MyRemote connection is registered. */
+	private myRemoteOk = false
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -188,6 +209,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.osc = null
 		}
 		this.stopIoPatchClient()
+		this.stopSurfaceClient()
 		if (this.channelsWatchdog) clearTimeout(this.channelsWatchdog)
 		this.channelsWatchdog = null
 		this.stopConnectScan()
@@ -204,7 +226,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.config.selected !== config.selected ||
 			this.config.host !== config.host ||
 			this.config.port !== config.port ||
-			!!this.config.readIoPatch !== !!config.readIoPatch
+			!!this.config.readIoPatch !== !!config.readIoPatch ||
+			(this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote') ||
+			this.config.surfacePort !== config.surfacePort ||
+			this.config.surfacePassword !== config.surfacePassword
 		this.config = config
 
 		this.updateActions()
@@ -218,6 +243,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.osc = null
 			}
 			this.stopIoPatchClient()
+			this.stopSurfaceClient()
+			this.surfaceControls.clear()
+			this.myRemoteOk = false
 			// L3: clear all mixer-state derived from the previous host so feedbacks
 			// don't briefly render the old mixer's values during the cross-over, and
 			// a carried-over failure count doesn't trigger a spurious re-discovery.
@@ -262,7 +290,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	}
 
 	getConfigFields(): SomeCompanionConfigField[] {
-		return GetConfigFields()
+		return GetConfigFields(this.label)
 	}
 
 	updateActions(): void {
@@ -366,6 +394,125 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.bindOscEvents(this.osc)
 		this.osc.connect()
 		if (this.config.readIoPatch) this.startIoPatchClient(host, port)
+		if (this.config.mode === 'surface') this.startSurfaceClient(host)
+	}
+
+	// ─── Companion Surface driver ─────────────────────────────────────────
+
+	/** The driver runs inside eMotion, so it lives on the same computer as the MyRemote server. */
+	private startSurfaceClient(host: string): void {
+		this.stopSurfaceClient()
+		const port = this.config.surfacePort || SURFACE_DEFAULT_PORT
+		const s = new SurfaceClient({ host, port, password: this.config.surfacePassword ?? '' })
+		const rejected = 'Companion Surface rejected the password'
+		let failing = false
+		this.surfaceProblem = `Companion Surface not reachable on ${host}:${port} — is it installed and added in eMotion's Controls panel?`
+		s.on('ready', (version: string | null) => {
+			failing = false
+			this.surfaceAsked.clear()
+			this.surfaceProblem =
+				version && compareVersions(version, SURFACE_DRIVER_VERSION) < 0
+					? `Companion Surface ${version} on the desk is older than ${SURFACE_DRIVER_VERSION} — reinstall it from the install page`
+					: null
+			this.log('info', `Companion Surface ${version ?? '?'} connected on ${host}:${port}`)
+			this.reportStatus()
+			// Feedback callbacks request the values they do not know yet.
+			this.checkFeedbacks()
+		})
+		s.on('control', (c: ControlUpdate) => {
+			this.surfaceControls.set(controlKey(c), c)
+			this.scheduleSurfaceFeedbacks()
+		})
+		s.on('authFailed', () => {
+			if (this.surfaceProblem === rejected) return
+			this.surfaceProblem = rejected
+			this.log('warn', rejected)
+			this.reportStatus()
+		})
+		s.on('driverError', (msg: string) => this.log('warn', `Companion Surface: ${msg}`))
+		s.on('error', (err: Error) => {
+			// Warn once per outage; the retries after that only go to debug.
+			this.log(failing ? 'debug' : 'warn', `Companion Surface ${host}:${port}: ${err.message} — retrying`)
+			failing = true
+		})
+		s.on('close', () => {
+			this.surfaceProblem = `Companion Surface on ${host}:${port} disconnected — retrying`
+			this.reportStatus()
+		})
+		this.surface = s
+		s.connect()
+	}
+
+	private stopSurfaceClient(): void {
+		if (this.surfaceFeedbackTimer) clearTimeout(this.surfaceFeedbackTimer)
+		this.surfaceFeedbackTimer = null
+		if (!this.surface) return
+		this.surface.removeAllListeners()
+		this.surface.disconnect()
+		this.surface = null
+	}
+
+	/** eMotion dumps a whole strip (~150 controls) when a channel is selected: redraw once. */
+	private scheduleSurfaceFeedbacks(): void {
+		if (this.surfaceFeedbackTimer) return
+		this.surfaceFeedbackTimer = setTimeout(() => {
+			this.surfaceFeedbackTimer = null
+			this.checkFeedbacks('surfaceTalk', 'surfaceSlotBypassed', 'surfaceRackOut')
+		}, 30)
+	}
+
+	/** Connection status: MyRemote first, then the driver when the mode needs it. */
+	private reportStatus(): void {
+		if (!this.myRemoteOk) return
+		if (this.config.mode !== 'surface' || !this.surfaceProblem) this.updateStatus(InstanceStatus.Ok)
+		else this.updateStatus(InstanceStatus.UnknownWarning, this.surfaceProblem)
+	}
+
+	/** Last value the driver reported for a control; asks for it once when unknown. */
+	surfaceValue(a: ControlAddress): number | null {
+		const key = controlKey(a)
+		const c = this.surfaceControls.get(key)
+		if (c) return c.value
+		if (this.surface?.isReady() && !this.surfaceAsked.has(key)) {
+			this.surfaceAsked.add(key)
+			this.surface.getx(a)
+		}
+		return null
+	}
+
+	surfaceBool(a: ControlAddress): boolean {
+		const v = this.surfaceValue(a)
+		return v != null && v >= 0.5
+	}
+
+	surfaceSet(a: ControlAddress, value: number): void {
+		if (!this.surface?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		this.surface.setx(a, value)
+		// Optimistic, so a quick second toggle inverts the new state; the driver's echo confirms it.
+		const key = controlKey(a)
+		this.surfaceControls.set(key, { ...a, value, text: this.surfaceControls.get(key)?.text ?? '' })
+		this.scheduleSurfaceFeedbacks()
+	}
+
+	surfaceSetBool(a: ControlAddress, on: boolean): void {
+		this.surfaceSet(a, on ? 1 : 0)
+	}
+
+	/** Serves the Companion Surface install page: http://<companion>/instance/<label>/surface */
+	handleHttpRequest(request: CompanionHTTPRequest): CompanionHTTPResponse {
+		const p = request.path.replace(/\/+$/, '')
+		if (p === '' || p === '/surface') {
+			const page = surfaceInstallPage()
+			return {
+				status: page.status,
+				headers: { 'Content-Type': page.status === 200 ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8' },
+				body: page.body,
+			}
+		}
+		return { status: 404, body: 'Not found' }
 	}
 
 	// ─── I/O patch (experimental) ─────────────────────────────────────────
@@ -469,7 +616,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		osc.on('registered', ({ style }: { style: string }) => {
 			this.log('info', `Registered with the LV1 as ${style}`)
-			this.updateStatus(InstanceStatus.Ok)
+			this.myRemoteOk = true
+			this.reportStatus()
 			// Re-request state on every connect. The LV1 doesn't spontaneously re-broadcast
 			// after a handshake the second time, so this keeps the dropdowns populated
 			// across module restarts.
@@ -488,6 +636,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			}, 2500)
 		})
 		osc.on('close', () => {
+			this.myRemoteOk = false
 			this.updateStatus(InstanceStatus.Disconnected)
 			this.consecutiveFailures++
 			this.log('warn', `Connection closed (attempt ${this.consecutiveFailures}), will auto-reconnect`)

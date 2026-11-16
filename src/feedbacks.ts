@@ -27,6 +27,7 @@ import {
 	buildRouteDestOptions,
 	resolveRouteDest,
 } from './tracks.js'
+import { surfaceFeedbacks } from './surface-actions.js'
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
 
@@ -301,6 +302,8 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			},
 		},
 	}
+
+	if (self.config.mode === 'surface') Object.assign(feedbacks, surfaceFeedbacks(self))
 
 	self.setFeedbackDefinitions(feedbacks)
 }
