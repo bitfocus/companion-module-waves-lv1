@@ -2,12 +2,7 @@
 // (any plugin, names and ranges read from the desk) and eMotion's own state as feedbacks.
 // Everything that moves dB or frequency can fade (the "Fade" option of the action).
 
-import {
-	CompanionActionDefinitions,
-	CompanionFeedbackDefinitions,
-	combineRgb,
-	type DropdownChoice,
-} from '@companion-module/base'
+import { CompanionActionDefinitions, CompanionFeedbackDefinitions, combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
 import {
 	MUTE_ALL,
@@ -37,46 +32,90 @@ const WHITE = combineRgb(255, 255, 255)
 
 const groupChoices = Array.from({ length: MUTE_GROUPS }, (_, i) => ({ id: String(i), label: `Mute group ${i + 1}` }))
 
-/** Plugin types present on the desk, and one parameter list per type (shown for that type only). */
+/** "Band1 Gain-L" → "Band1 Gain": stereo plugin versions split parameters into L / R. */
+function baseName(name: string): string {
+	return name.replace(/[-\s](L|R)$/, '')
+}
+
+/** Option id for a plugin name ("EMO-Q4" → "EMO_Q4"). */
+function pluginKey(name: string): string {
+	return name.replace(/[^A-Za-z0-9]/g, '_')
+}
+
+/**
+ * Plugins present on the desk, by name (mono and stereo versions together), and one parameter
+ * list per plugin by name without L / R. Any strip can be mono or stereo: the version in the
+ * strip's own slot decides which parameters are written when the action runs.
+ */
 function pluginFields(self: LV1Instance): AnyOpt[] {
-	const plugins = [...self.surfaceModel.plugins.values()]
-		.filter((p) => p.params.size)
-		.sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code))
-	const pluginChoices: DropdownChoice[] = plugins.map((p) => ({ id: p.code, label: `${p.name} (${p.code})` }))
+	const byName = new Map<string, string[]>()
+	for (const p of self.surfaceModel.plugins.values()) {
+		if (!p.params.size) continue
+		const list = byName.get(p.name) ?? []
+		for (const x of [...p.params.values()].sort((a, b) => a.index - b.index)) {
+			const n = baseName(x.name)
+			if (!list.includes(n)) list.push(n)
+		}
+		byName.set(p.name, list)
+	}
+	const names = [...byName.keys()].sort((a, b) => a.localeCompare(b))
 	const out: AnyOpt[] = [
 		{
 			type: 'dropdown',
 			id: 'plugin',
 			label: 'Plugin',
-			default: pluginChoices[0]?.id ?? '',
-			choices: pluginChoices.length ? pluginChoices : [{ id: '', label: '— no plugins read from the desk yet —' }],
+			default: names[0] ?? '',
+			choices: names.length
+				? names.map((n) => ({ id: n, label: n }))
+				: [{ id: '', label: '— no plugins read from the desk yet —' }],
 			tooltip: 'The first slot of the strip that holds this plugin is used.',
 		},
 	]
-	for (const p of plugins) {
-		const choices = [...p.params.values()]
-			.sort((a, b) => a.index - b.index)
-			.map((x) => ({ id: String(x.index), label: x.name }))
+	for (const n of names) {
+		const params = byName.get(n) ?? []
 		out.push({
 			type: 'dropdown',
-			id: `param_${p.code}`,
+			id: `param_${pluginKey(n)}`,
 			label: 'Parameter',
-			default: choices[0]?.id ?? '0',
-			choices,
-			isVisibleExpression: `$(options:plugin) == '${p.code}'`,
+			default: params[0] ?? '',
+			choices: params.map((x) => ({ id: x, label: x })),
+			isVisibleExpression: `$(options:plugin) == '${n}'`,
 		})
 	}
+	out.push({
+		type: 'dropdown',
+		id: 'side',
+		label: 'On stereo strips',
+		default: 'both',
+		choices: [
+			{ id: 'both', label: 'Left and right together' },
+			{ id: 'L', label: 'Left only' },
+			{ id: 'R', label: 'Right only' },
+		],
+	})
 	return out
 }
 
+/** The slot, plugin version and parameter(s) an action / feedback addresses on its strip. */
 function pluginTarget(self: LV1Instance, options: Record<string, unknown>) {
 	const { tt, track } = parseStrip(options.strip)
-	const code = typeof options.plugin === 'string' ? options.plugin : ''
-	const raw = options[`param_${code}`]
-	const index = parseInt(typeof raw === 'string' || typeof raw === 'number' ? String(raw) : '', 10)
-	const param = self.surfaceModel.plugins.get(code)?.params.get(index)
-	const slot = self.surfaceModel.findSlot(tt, track, code)
-	return { tt, track, code, index, param, slot }
+	const model = self.surfaceModel
+	const plugin = typeof options.plugin === 'string' ? options.plugin : ''
+	const rawParam = options[`param_${pluginKey(plugin)}`]
+	const wanted = typeof rawParam === 'string' ? rawParam : ''
+	let slot = -1
+	for (let sl = 0; sl < 8 && slot < 0; sl++) if (model.slots.get(`${tt}.${track}.${sl}`)?.name === plugin) slot = sl
+	const code = slot >= 0 ? model.slotCode(tt, track, slot) : ''
+	const info = model.plugins.get(code)
+	const all = info ? [...info.params.values()] : []
+	const exact = all.find((p) => p.name === wanted)
+	const left = all.find((p) => p.name === `${wanted}-L` || p.name === `${wanted} L`)
+	const right = all.find((p) => p.name === `${wanted}-R` || p.name === `${wanted} R`)
+	const side = options.side === 'L' || options.side === 'R' ? options.side : 'both'
+	// Mono version: the parameter itself. Stereo version: L, R or both.
+	const params = exact ? [exact] : side === 'L' ? [left] : side === 'R' ? [right] : [left, right]
+	const targets = params.filter((p): p is NonNullable<typeof p> => !!p)
+	return { tt, track, plugin, wanted, slot, targets, param: targets[0], index: targets[0]?.index ?? -1 }
 }
 
 export function featureActions(self: LV1Instance): CompanionActionDefinitions {
@@ -182,19 +221,16 @@ export function featureActions(self: LV1Instance): CompanionActionDefinitions {
 			],
 			callback: async (a, context) => {
 				const t = pluginTarget(self, a.options)
-				if (!t.param || t.slot < 0) {
-					self.log('warn', `Plugin parameter: ${t.code || 'no plugin'} not found on that strip`)
+				if (!t.targets.length || t.slot < 0) {
+					self.log('warn', `Plugin parameter: ${t.plugin || 'no plugin'} / ${t.wanted} not found on that strip`)
 					return
 				}
 				const value = await resolveNumberAsync(a.options, 'value', context, 0)
-				await self.surfaceChangePluginParam(
-					t.tt,
-					t.track,
-					t.slot,
-					t.param,
-					String(a.options.mode),
-					value,
-					await resolveFade(a.options, context),
+				const fade = await resolveFade(a.options, context)
+				await Promise.all(
+					t.targets.map(async (p) =>
+						self.surfaceChangePluginParam(t.tt, t.track, t.slot, p, String(a.options.mode), value, fade),
+					),
 				)
 			},
 		},
@@ -299,7 +335,7 @@ export function featureFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 				const t = pluginTarget(self, fb.options)
 				if (!t.param || t.slot < 0) return {}
 				const shown = self.surfacePluginText(t.tt, t.track, t.slot, t.index)
-				return shown == null ? {} : { text: `${t.param.name}\n${shown}` }
+				return shown == null ? {} : { text: `${t.wanted}\n${shown}` }
 			},
 		},
 		surfaceLock: {
