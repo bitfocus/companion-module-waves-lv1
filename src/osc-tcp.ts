@@ -78,7 +78,7 @@ export class OscTcpClient extends EventEmitter {
 			this.connected = true
 			this.emit('connect', { host: this.host, port: this.port })
 			// Run the handshake immediately. Caller listens for 'registered' to know when /Set/ is safe.
-			this.register().catch((err) => this.emit('error', err))
+			this.register().catch((err) => this.emit('error', err instanceof Error ? err : new Error(String(err))))
 		})
 
 		sock.on('data', (chunk) => {
@@ -223,7 +223,7 @@ export class OscTcpClient extends EventEmitter {
 				if (!ack) {
 					// M2: no ACK means we are NOT registered. Don't fall through and emit
 					// 'registered' — that would drive Status=Ok over a half-open link.
-					this.emit('error', new Error('No /handshake ACK after 3 s'))
+					this.failHandshake()
 					return
 				}
 				this.emit('registered', { style: this.handshakeStyle })
@@ -246,7 +246,7 @@ export class OscTcpClient extends EventEmitter {
 				)
 				if (!ack) {
 					// M2: no ACK = not registered, do not emit 'registered' or set Status=Ok.
-					this.emit('error', new Error('No /handshake ACK after 3 s'))
+					this.failHandshake()
 					return
 				}
 				this.send('/device_name', [
@@ -256,8 +256,16 @@ export class OscTcpClient extends EventEmitter {
 				this.emit('registered', { style: 'mymon' })
 			}
 		} catch (err) {
-			this.emit('error', err)
+			this.emit('error', err instanceof Error ? err : new Error(String(err)))
 		}
+	}
+
+	/** The desk accepted TCP but never acknowledged the handshake. Drop the socket so
+	 *  the 'close' handler retries (with auto-reconnect) instead of sitting on a
+	 *  half-open link with the status stuck on Connecting. */
+	private failHandshake(): void {
+		this.emit('error', new Error('No /handshake ACK after 3 s — reconnecting'))
+		this.socket?.destroy()
 	}
 
 	// ─── Frame reassembly ─────────────────────────────────────────────────

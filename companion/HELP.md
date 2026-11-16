@@ -193,7 +193,8 @@ the manual-IP method and everything else works normally.
 - `{slug}_gain` — fader in dB, e.g. `"-7.3"` (blank until the desk reports it)
 - `{slug}_ingain`, `{slug}_trim` — preamp gain / digital trim as reported
 - `{slug}_pan`, `{slug}_width`, `{slug}_balance` — pan / stereo width / balance
-- `{slug}_stereo` — `"on"` for stereo strips (v17)
+  (balance is blank on mono strips and until the desk reports it)
+- `{slug}_stereo` — `"on"` / `"off"` (v17; blank = unknown)
 - `{slug}_polarity`, `{slug}_phantom` — `"on"` / `"off"` / blank = unknown
 - `{slug}_vu`, `{slug}_vu_r` — meter level in dB
 - `{slug}_color` — hex like `"#FF5500"`
