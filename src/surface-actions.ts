@@ -11,7 +11,6 @@ import {
 	type DropdownChoice,
 } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
-import type { ControlAddress } from './surface-client.js'
 import { SurfaceControls } from './surface.js'
 import { FLIP_ALL_SELECTION, SURFACE_MIXERS, SURFACE_TRACK_TYPES, TB_PRESET } from './surface-model.js'
 import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
@@ -195,34 +194,6 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 				const { tt, track } = parseStrip(a.options.strip)
 				const addr = SurfaceControls.rackIn(tt, track)
 				self.surfaceSetBool(addr, await desiredState(a.options, context, self.surfaceBool(addr)))
-			},
-		},
-
-		surfaceRawControl: {
-			name: 'Advanced: Set any control',
-			description:
-				'Writes one eMotion control by its raw address (track type, track, section group, section type / index, control id). ' +
-				'For controls that have no action yet.',
-			options: [
-				buildNumberExprField('tt', 'Track type (0 = input, 2 = FX, 8 = Talk Back, 25 = Monitor…)', 0, 'Variables OK.'),
-				buildNumberExprField('track', 'Track index (0-based)', 0, 'Variables OK.'),
-				buildNumberExprField('group', 'Section group', 7, 'Variables OK.'),
-				buildNumberExprField('secType', 'Section type (-1 = none)', -1, 'Variables OK.'),
-				buildNumberExprField('secIdx', 'Section index (-1 = none)', -1, 'Variables OK.'),
-				buildNumberExprField('cid', 'Control id', 0, 'Variables OK.'),
-				buildNumberExprField('value', 'Value', 0, 'Raw control value. Variables OK.'),
-			],
-			callback: async (a, context) => {
-				const n = async (id: string, def: number) => Math.round(await resolveNumberAsync(a.options, id, context, def))
-				const addr: ControlAddress = {
-					tt: await n('tt', 0),
-					track: await n('track', 0),
-					group: await n('group', 7),
-					secType: await n('secType', -1),
-					secIdx: await n('secIdx', -1),
-					cid: await n('cid', 0),
-				}
-				self.surfaceSet(addr, await resolveNumberAsync(a.options, 'value', context, 0))
 			},
 		},
 	}
