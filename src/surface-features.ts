@@ -366,6 +366,13 @@ export function featureFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 			options: [],
 			callback: () => !!self.surfaceModel.gui.sceneDirty,
 		},
+		surfaceSessionDirty: {
+			type: 'boolean',
+			name: 'eMotion: Session has unsaved changes',
+			defaultStyle: { bgcolor: AMBER, color: WHITE },
+			options: [],
+			callback: () => !!self.surfaceModel.gui.sessionDirty,
+		},
 		surfaceScene: {
 			type: 'boolean',
 			name: 'Scenes: Scene is the current one',

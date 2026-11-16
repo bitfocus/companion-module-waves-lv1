@@ -1,13 +1,70 @@
-// Ready-made buttons for the Companion Surface mode: one flip button per mixer and aux (named
-// after the aux, lit only while that mixer is flipped to it), Talk Back presets and TALK.
+// Ready-made buttons for the Companion Surface mode, built from what the desk reported: strips
+// (mute, solo, fader moves and fades, plugin switches), Mute All, mute groups, scenes, eMotion
+// functions, Talk Back and flips. Names and values on the buttons follow the desk live.
 
-import { CompanionPresetDefinitions, combineRgb } from '@companion-module/base'
+import {
+	CompanionPresetDefinitions,
+	combineRgb,
+	type CompanionPresetAction,
+	type CompanionPresetFeedback,
+} from '@companion-module/base'
 import type { LV1Instance } from './main.js'
-import { MUTE_ALL, STRIP_TYPES, SURFACE_MIXERS, SURFACE_TRACK_TYPES, strip } from './surface-model.js'
+import {
+	MUTE_ALL,
+	MUTE_GROUPS,
+	RACK_SLOTS,
+	RACK_TYPES,
+	STRIP_TYPES,
+	SURFACE_MIXERS,
+	SURFACE_TRACK_TYPES,
+	strip,
+} from './surface-model.js'
 import { controlKey } from './surface-client.js'
 
 const WHITE = combineRgb(255, 255, 255)
 const BLACK = combineRgb(0, 0, 0)
+const RED = combineRgb(200, 0, 0)
+const AMBER = combineRgb(200, 120, 0)
+const YELLOW = combineRgb(220, 180, 0)
+const GREEN = combineRgb(0, 140, 0)
+const BLUE = combineRgb(0, 120, 200)
+
+/** Preset category per track type. */
+const CATEGORY: Record<number, string> = {
+	0: 'Channels',
+	1: 'Groups',
+	2: 'FX',
+	25: 'Monitors',
+	6: 'Matrix',
+	12: 'Links',
+	3: 'Masters',
+	4: 'Masters',
+	5: 'Masters',
+}
+
+function button(
+	category: string,
+	name: string,
+	text: string,
+	down: CompanionPresetAction[],
+	feedbacks: CompanionPresetFeedback[] = [],
+	up: CompanionPresetAction[] = [],
+	size: 'auto' | '7' | '14' | '18' | '24' = '14',
+) {
+	return {
+		type: 'button' as const,
+		category,
+		name,
+		style: { text, size, color: WHITE, bgcolor: BLACK },
+		steps: [{ down, up }],
+		feedbacks,
+	}
+}
+
+const fn = (id: number) => ({
+	actionId: 'surfaceFunction',
+	options: { fn: String(id), strip: '0:0', number: '1', phase: 'tap' },
+})
 
 export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 	const presets: CompanionPresetDefinitions = {}
@@ -37,7 +94,7 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 						{
 							feedbackId: 'surfaceFlip',
 							options: { mixer: mixer.id, aux },
-							style: { bgcolor: combineRgb(0, 120, 200), color: WHITE },
+							style: { bgcolor: BLUE, color: WHITE },
 						},
 					],
 				}
@@ -61,6 +118,196 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 			],
 		}
 	}
+
+	// ── Strips: mute, solo, fader moves / fades, plugin switches ──
+	for (const t of SURFACE_TRACK_TYPES) {
+		if (!STRIP_TYPES.includes(t.tt)) continue
+		const cat = CATEGORY[t.tt] ?? t.label
+		for (const tr of self.surfaceModel.list(t.tt)) {
+			const slug = slugOf(t, tr.track)
+			const id = `${t.tt}:${tr.track}`
+			const name = `$(${label}:${slug}_name)`
+			const level = `$(${label}:${slug}_fader)`
+			const who = t.max === 1 ? t.label : `${t.label} ${tr.track + 1}`
+			presets[`mute_${slug}`] = button(
+				`Mute: ${cat}`,
+				`Mute ${who}`,
+				`MUTE\n${name}`,
+				[{ actionId: 'surfaceMute', options: { strip: id, state: 'toggle', state_expr: '' } }],
+				[{ feedbackId: 'surfaceMuted', options: { strip: id }, style: { bgcolor: RED, color: WHITE } }],
+			)
+			presets[`solo_${slug}`] = button(
+				`Solo: ${cat}`,
+				`Solo ${who}`,
+				`SOLO\n${name}`,
+				[{ actionId: 'surfaceSolo', options: { strip: id, state: 'toggle', state_expr: '' } }],
+				[{ feedbackId: 'surfaceSoloed', options: { strip: id }, style: { bgcolor: YELLOW, color: BLACK } }],
+			)
+			const fader = (mode: string, db: string, fadeMs: string) => ({
+				actionId: 'surfaceFader',
+				options: { strip: id, mode, db, fade: fadeMs !== '', fadeMs: fadeMs || '1000', curve: 'ease' },
+			})
+			presets[`fadein_${slug}`] = button(
+				`Fader: ${cat}`,
+				`${who}: fade in to 0 dB (2 s)`,
+				`${name}\nFADE IN\n${level}`,
+				[fader('set', '0', '2000')],
+			)
+			presets[`fadeout_${slug}`] = button(
+				`Fader: ${cat}`,
+				`${who}: fade out to −∞ (2 s)`,
+				`${name}\nFADE OUT\n${level}`,
+				[fader('set', '-144', '2000')],
+			)
+			presets[`up_${slug}`] = button(`Fader: ${cat}`, `${who}: +1 dB`, `${name}\n+1 dB\n${level}`, [
+				fader('inc', '1', ''),
+			])
+			presets[`down_${slug}`] = button(`Fader: ${cat}`, `${who}: −1 dB`, `${name}\n−1 dB\n${level}`, [
+				fader('dec', '1', ''),
+			])
+
+			if (!RACK_TYPES.includes(t.tt)) continue
+			const slots = Array.from(
+				{ length: RACK_SLOTS },
+				(_, i) => self.surfaceModel.slots.get(`${t.tt}.${tr.track}.${i}`)?.name ?? '',
+			)
+			const plugin = (pluginName: string, param: string, text: string, key: string) => {
+				if (!slots.includes(pluginName)) return
+				const opt = {
+					strip: id,
+					plugin: pluginName,
+					[`param_${pluginName.replace(/[^A-Za-z0-9]/g, '_')}`]: param,
+					side: 'both',
+				}
+				presets[`${key}_${slug}`] = button(
+					`Plugins: ${cat}`,
+					`${who}: ${pluginName} ${param}`,
+					`${text}\n${name}`,
+					[
+						{
+							actionId: 'surfacePluginParam',
+							options: { ...opt, mode: 'toggle', value: '0', fade: false, fadeMs: '1000', curve: 'linear' },
+						},
+					],
+					[
+						{
+							feedbackId: 'surfacePluginState',
+							options: { ...opt, text: 'On' },
+							style: { bgcolor: GREEN, color: WHITE },
+						},
+					],
+				)
+			}
+			plugin('EMO-F2', 'HpfOn', 'HPF', 'hpf')
+			plugin('EMO-D5', 'Gate On', 'GATE', 'gate')
+			plugin('EMO-D5', 'Comp On', 'COMP', 'comp')
+			const eqSlot = slots.indexOf('EMO-Q4')
+			if (eqSlot >= 0) {
+				presets[`eq_${slug}`] = button(
+					`Plugins: ${cat}`,
+					`${who}: EQ (EMO-Q4) in / out`,
+					`EQ\n${name}`,
+					[
+						{
+							actionId: 'surfaceSlotBypass',
+							options: { strip: id, slot: String(eqSlot), state: 'toggle', state_expr: '' },
+						},
+					],
+					[
+						{
+							feedbackId: 'surfaceSlotBypassed',
+							options: { strip: id, slot: String(eqSlot) },
+							style: { bgcolor: GREEN, color: WHITE },
+							isInverted: true,
+						},
+					],
+				)
+			}
+		}
+	}
+
+	// ── Mute All and mute groups ──
+	presets.mute_all = button(
+		'Mute All / groups',
+		'Mute All',
+		'MUTE\nALL',
+		[{ actionId: 'surfaceMuteAll', options: { state: 'toggle', state_expr: '' } }],
+		[{ feedbackId: 'surfaceMuteAll', options: {}, style: { bgcolor: RED, color: WHITE } }],
+		[],
+		'18',
+	)
+	for (let g = 0; g < MUTE_GROUPS; g++) {
+		presets[`mute_group_${g + 1}`] = button(
+			'Mute All / groups',
+			`Mute group ${g + 1}`,
+			`MUTE\nGROUP ${g + 1}`,
+			[{ actionId: 'surfaceMuteGroup', options: { group: String(g), state: 'toggle', state_expr: '' } }],
+			[{ feedbackId: 'surfaceMuteGroup', options: { group: String(g) }, style: { bgcolor: RED, color: WHITE } }],
+		)
+	}
+
+	// ── Scenes ──
+	presets.scene_current = button(
+		'Scenes',
+		'Current scene (amber = unsaved changes)',
+		`SCENE $(${label}:scene)\n$(${label}:scene_name)`,
+		[fn(11)],
+		[{ feedbackId: 'surfaceSceneDirty', options: {}, style: { bgcolor: AMBER, color: WHITE } }],
+	)
+	presets.scene_next = button('Scenes', 'Next scene', 'NEXT\nSCENE', [fn(31)])
+	presets.scene_prev = button('Scenes', 'Previous scene', 'PREV\nSCENE', [fn(32)])
+	presets.scene_store = button(
+		'Scenes',
+		'Store scene',
+		'STORE\nSCENE',
+		[fn(29)],
+		[{ feedbackId: 'surfaceSceneDirty', options: {}, style: { bgcolor: AMBER, color: WHITE } }],
+	)
+	presets.scene_store_new = button('Scenes', 'Store new scene', 'STORE\nNEW', [fn(30)])
+	presets.scene_undo = button('Scenes', 'Scene undo', 'SCENE\nUNDO', [fn(8)])
+
+	// ── eMotion ──
+	presets.emotion_lock = button(
+		'eMotion',
+		'Lock',
+		'LOCK',
+		[fn(19)],
+		[{ feedbackId: 'surfaceLock', options: {}, style: { bgcolor: RED, color: WHITE } }],
+		[],
+		'18',
+	)
+	presets.emotion_clear_solo = button(
+		'eMotion',
+		'Clear Solo (lit while any solo is on)',
+		'CLEAR\nSOLO',
+		[fn(44)],
+		[{ feedbackId: 'surfaceSoloActive', options: {}, style: { bgcolor: YELLOW, color: BLACK } }],
+	)
+	presets.emotion_tap = button('eMotion', 'Tap Tempo', `TAP\n$(${label}:tempo) BPM`, [fn(20)])
+	presets.emotion_rec_start = button(
+		'eMotion',
+		'Recording start',
+		'REC\nSTART',
+		[fn(52)],
+		[{ feedbackId: 'surfaceRecording', options: {}, style: { bgcolor: RED, color: WHITE } }],
+	)
+	presets.emotion_rec_stop = button(
+		'eMotion',
+		'Recording stop',
+		'REC\nSTOP',
+		[fn(53)],
+		[{ feedbackId: 'surfaceRecording', options: {}, style: { bgcolor: RED, color: WHITE } }],
+	)
+	presets.emotion_save = button(
+		'eMotion',
+		'Save session (amber = unsaved changes)',
+		'SAVE\nSESSION',
+		[fn(1)],
+		[{ feedbackId: 'surfaceSessionDirty', options: {}, style: { bgcolor: AMBER, color: WHITE } }],
+	)
+	presets.emotion_prev_ch = button('eMotion', 'Previous channel', 'PREV\nCHANNEL', [fn(14)])
+	presets.emotion_next_ch = button('eMotion', 'Next channel', 'NEXT\nCHANNEL', [fn(15)])
+	presets.emotion_selected = button('eMotion', 'Selected channel', `SELECTED\n$(${label}:selected_channel)`, [fn(18)])
 
 	presets.tb_talk = {
 		type: 'button',

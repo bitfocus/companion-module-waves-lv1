@@ -836,6 +836,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				'surfaceRecording',
 				'surfaceSoloActive',
 				'surfaceSceneDirty',
+				'surfaceSessionDirty',
 				'surfaceScene',
 			)
 		}, 30)
