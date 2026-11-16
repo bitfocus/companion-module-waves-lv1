@@ -33,9 +33,22 @@ import { MASK_GROUPS, decodeRouteMask, isTalkBackDest, routeKey } from './routin
 import { parseIOConnections, rowLabel, rowTrack } from './io-connections.js'
 import { SurfaceClient, controlKey, type ControlAddress, type ControlUpdate } from './surface-client.js'
 import { SURFACE_DEFAULT_PORT, SURFACE_DRIVER_VERSION, compareVersions, surfaceInstallPage } from './surface.js'
-import { SurfaceModel } from './surface-model.js'
+import {
+	SurfaceModel,
+	MUTE_ALL,
+	MUTE_GROUPS,
+	RACK_SLOTS,
+	RACK_TYPES,
+	STRIP_TYPES,
+	SURFACE_TRACK_TYPES,
+	displayNumber,
+	muteGroupAddress,
+	strip,
+	type PluginParam,
+} from './surface-model.js'
+import type { FadeCurve } from './surface-ui.js'
 import { surfaceVariableValues } from './surface-presets.js'
-import type { InterMapMessage } from './surface-client.js'
+import type { ControlProps, EmotionSignal, InterMapMessage, RealUpdate } from './surface-client.js'
 
 interface ChannelState {
 	muted: boolean
@@ -162,6 +175,12 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	private surfaceKeys = new Map<string, number>()
 	private nextSurfaceSlot = 1
 	private surfaceDefsTimer: NodeJS.Timeout | null = null
+	/** Running fades, key = the control being faded. */
+	private surfaceFades = new Map<string, NodeJS.Timeout>()
+	/** The desk's strips, racks and groups were read on this connection. */
+	private surfaceProbed = false
+	/** Plugin codes whose parameter catalogue was requested on this connection. */
+	private surfacePluginsAsked = new Set<string>()
 
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
@@ -445,7 +464,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.nextSurfaceSlot = 1
 			// Flip state comes from eMotion's InterMapper messages; names and counts from the tracks.
 			s.write('sub im 1')
+			this.surfacePluginsAsked.clear()
 			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+			// Strips, racks and groups are read once the names say which tracks exist.
+			this.surfaceProbed = false
 			this.surfaceProblem =
 				version && compareVersions(version, SURFACE_DRIVER_VERSION) < 0
 					? `Companion Surface ${version} on the desk is older than ${SURFACE_DRIVER_VERSION} — reinstall it from the install page`
@@ -457,10 +479,26 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		s.on('control', (c: ControlUpdate) => {
 			this.surfaceControls.set(controlKey(c), c)
+			this.surfaceLearn(c)
 			const kind = this.surfaceModel.applyControl(c)
 			if (kind === 'names') this.scheduleSurfaceDefinitions()
 			else if (kind === 'tb') this.pushSurfaceVariables()
 			this.scheduleSurfaceFeedbacks()
+		})
+		s.on('real', (r: RealUpdate) => {
+			if (r.mode !== 3) return
+			this.surfaceModel.real.set(controlKey(r), r.value)
+			this.scheduleSurfaceFeedbacks()
+			this.scheduleSurfaceVariables()
+		})
+		s.on('props', (p: ControlProps) => {
+			const slot = this.surfaceModel.slots.get(`${p.tt}.${p.track}.${p.secType}`)
+			if (slot && this.surfaceModel.applyProps(slot.code, slot.name, p)) this.scheduleSurfaceDefinitions()
+		})
+		s.on('signal', (sig: EmotionSignal) => {
+			if (!this.surfaceModel.applySignal(sig.name, sig.args)) return
+			this.scheduleSurfaceFeedbacks()
+			this.scheduleSurfaceVariables()
 		})
 		s.on('intermap', (m: InterMapMessage) => {
 			if (!this.surfaceModel.applyInterMap(m)) return
@@ -493,6 +531,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (this.surfaceDefsTimer) return
 		this.surfaceDefsTimer = setTimeout(() => {
 			this.surfaceDefsTimer = null
+			if (!this.surfaceProbed && this.surface?.isReady()) {
+				this.surfaceProbed = true
+				this.surfaceProbeDesk(this.surface)
+			}
 			this.updateActions()
 			this.updateFeedbacks()
 			this.updatePresets()
@@ -503,6 +545,224 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 
 	private pushSurfaceVariables(): void {
 		this.setVariableValues(surfaceVariableValues(this))
+	}
+
+	private surfaceVariablesTimer: NodeJS.Timeout | null = null
+	private scheduleSurfaceVariables(): void {
+		if (this.surfaceVariablesTimer) return
+		this.surfaceVariablesTimer = setTimeout(() => {
+			this.surfaceVariablesTimer = null
+			this.pushSurfaceVariables()
+		}, 100)
+	}
+
+	/** After the names: faders (dB), mutes, solos and rack slots of the tracks that exist, mute groups, Mute All. */
+	private surfaceProbeDesk(s: SurfaceClient): void {
+		for (const t of SURFACE_TRACK_TYPES) {
+			if (!STRIP_TYPES.includes(t.tt)) continue
+			for (const tr of this.surfaceModel.list(t.tt)) {
+				const i = tr.track
+				s.getReal(strip.fader(t.tt, i))
+				s.getx(strip.mute(t.tt, i))
+				s.getx(strip.solo(t.tt, i))
+				if (!RACK_TYPES.includes(t.tt)) continue
+				for (let slot = 0; slot < RACK_SLOTS; slot++) {
+					s.getx(strip.slotName(t.tt, i, slot))
+					s.getx(strip.slotCode(t.tt, i, slot))
+				}
+			}
+		}
+		for (let g = 0; g < MUTE_GROUPS; g++) s.getx(muteGroupAddress(g))
+		s.getx(MUTE_ALL)
+	}
+
+	/** Facts learned from control reports: fader dB from its display, plugins in slots, parameter scales. */
+	private surfaceLearn(c: ControlUpdate): void {
+		const s = this.surface
+		const model = this.surfaceModel
+		// Fader display (cid 1) carries the dB text of the fader written on cid 0.
+		if (c.group === 7 && c.cid === 1 && c.secType === -1) {
+			const db = displayNumber(c.text)
+			if (db != null) model.real.set(controlKey(strip.fader(c.tt, c.track)), db)
+			this.scheduleSurfaceVariables()
+			return
+		}
+		if (c.group !== 4) return
+		if (model.applySlot(c)) {
+			const slot = model.slots.get(`${c.tt}.${c.track}.${c.secType}`)
+			// First time a plugin type shows up: read its parameter names and ranges from this slot.
+			if (s && slot?.code && slot.name && !this.surfacePluginsAsked.has(slot.code)) {
+				this.surfacePluginsAsked.add(slot.code)
+				for (let i = 0; i < 128; i++) {
+					s.props(strip.param(c.tt, c.track, c.secType, i))
+					s.getx(strip.param(c.tt, c.track, c.secType, i))
+				}
+			}
+			this.scheduleSurfaceDefinitions()
+			return
+		}
+		// A parameter value with its display text: learn whether the parameter is linear or log.
+		if (c.cid === 11 && c.secIdx >= 0) {
+			const code = model.slotCode(c.tt, c.track, c.secType)
+			const p = model.plugins.get(code)?.params.get(c.secIdx)
+			if (p && p.kind === 'continuous' && !p.scale) {
+				const shown = displayNumber(c.text)
+				if (shown != null && c.value > 20 && c.value < 980) {
+					const lin = p.min + (c.value / 1000) * (p.max - p.min)
+					const log = p.min > 0 ? p.min * Math.pow(p.max / p.min, c.value / 1000) : NaN
+					p.scale = Number.isFinite(log) && Math.abs(log - shown) < Math.abs(lin - shown) ? 'log' : 'linear'
+				}
+			}
+			this.scheduleSurfaceFeedbacks()
+		}
+	}
+
+	/** Fader in dB, from what the desk reported. */
+	surfaceFaderDb(tt: number, track: number): number | null {
+		const v = this.surfaceModel.real.get(controlKey(strip.fader(tt, track)))
+		if (v != null) return v
+		this.surface?.getReal(strip.fader(tt, track))
+		return null
+	}
+
+	surfaceSetFader(tt: number, track: number, db: number, fade: { ms: number; curve: FadeCurve } | null): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const addr = strip.fader(tt, track)
+		const key = controlKey(addr)
+		const apply = (v: number) => {
+			s.setReal(addr, Math.round(v * 10) / 10)
+			this.surfaceModel.real.set(key, v)
+		}
+		const from = this.surfaceModel.real.get(key)
+		if (!fade || from == null) {
+			this.surfaceStopFade(key)
+			apply(db)
+			this.scheduleSurfaceVariables()
+			return
+		}
+		// Fading up from −∞: start where the fader starts to be audible.
+		this.surfaceFade(key, Math.max(from, -80), db, fade, apply)
+	}
+
+	/** A plugin parameter's display text (as eMotion shows it), or null when not known yet. */
+	surfacePluginText(tt: number, track: number, slot: number, index: number): string | null {
+		const addr = strip.param(tt, track, slot, index)
+		const c = this.surfaceControls.get(controlKey(addr))
+		if (c) return c.text
+		if (this.surface?.isReady() && !this.surfaceAsked.has(controlKey(addr))) {
+			this.surfaceAsked.add(controlKey(addr))
+			this.surface.getx(addr)
+		}
+		return null
+	}
+
+	private toRaw(p: PluginParam, v: number): number {
+		if (p.scale === 'log' && p.min > 0 && v > 0) return (1000 * Math.log(v / p.min)) / Math.log(p.max / p.min)
+		return ((v - p.min) / (p.max - p.min || 1)) * 1000
+	}
+
+	private fromRaw(p: PluginParam, raw: number): number {
+		if (p.scale === 'log' && p.min > 0) return p.min * Math.pow(p.max / p.min, raw / 1000)
+		return p.min + (raw / 1000) * (p.max - p.min)
+	}
+
+	/** Change a plugin parameter: set / inc / dec in its units (optionally fading), toggle, next, prev. */
+	async surfaceChangePluginParam(
+		tt: number,
+		track: number,
+		slot: number,
+		p: PluginParam,
+		mode: string,
+		value: number,
+		fade: { ms: number; curve: FadeCurve } | null,
+	): Promise<void> {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const addr = strip.param(tt, track, slot, p.index)
+		const key = controlKey(addr)
+		let raw = this.surfaceControls.get(key)?.value
+		if (raw == null) {
+			s.getx(addr)
+			await new Promise((r) => setTimeout(r, 200))
+			raw = this.surfaceControls.get(key)?.value
+		}
+		const write = (r: number) => {
+			s.setx(addr, r)
+			const prev = this.surfaceControls.get(key)
+			this.surfaceControls.set(key, { ...addr, value: r, text: prev?.text ?? '' })
+		}
+		if (p.kind === 'state' || mode === 'toggle' || mode === 'next' || mode === 'prev') {
+			const cur = Math.round(raw ?? 0)
+			let next = cur
+			if (mode === 'toggle') next = cur ? 0 : 1
+			else if (mode === 'next') next = cur + 1
+			else if (mode === 'prev') next = Math.max(0, cur - 1)
+			else if (mode === 'inc') next = cur + Math.round(value)
+			else if (mode === 'dec') next = Math.max(0, cur - Math.round(value))
+			else next = Math.max(0, Math.round(value))
+			this.surfaceStopFade(key)
+			write(next)
+			if (mode === 'next') {
+				// Past the last state eMotion keeps the old value: wrap to the first one.
+				setTimeout(() => {
+					if (Math.round(this.surfaceControls.get(key)?.value ?? next) === cur) write(0)
+				}, 300)
+				s.getx(addr)
+			}
+			return
+		}
+		const current = raw != null ? this.fromRaw(p, raw) : p.min
+		const lo = Math.min(p.min, p.max)
+		const hi = Math.max(p.min, p.max)
+		const target = Math.max(
+			lo,
+			Math.min(hi, mode === 'inc' ? current + value : mode === 'dec' ? current - value : value),
+		)
+		const targetRaw = Math.max(0, Math.min(1000, this.toRaw(p, target)))
+		if (!fade || raw == null) {
+			this.surfaceStopFade(key)
+			write(targetRaw)
+			return
+		}
+		// Fade on the desk's own 0-1000 scale: even steps on log controls (frequency) too.
+		this.surfaceFade(key, raw, targetRaw, fade, write)
+	}
+
+	private surfaceStopFade(key: string): void {
+		const t = this.surfaceFades.get(key)
+		if (t) clearInterval(t)
+		this.surfaceFades.delete(key)
+	}
+
+	/** Steps a value from → to over the fade time (about 25 steps per second). */
+	private surfaceFade(
+		key: string,
+		from: number,
+		to: number,
+		fade: { ms: number; curve: FadeCurve },
+		apply: (v: number) => void,
+	): void {
+		this.surfaceStopFade(key)
+		const start = Date.now()
+		const ease = (x: number) =>
+			fade.curve === 'ease' ? x * x * (3 - 2 * x) : fade.curve === 'easeOut' ? 1 - (1 - x) * (1 - x) : x
+		const step = () => {
+			const x = Math.min(1, (Date.now() - start) / fade.ms)
+			apply(from + (to - from) * ease(x))
+			if (x >= 1) {
+				this.surfaceStopFade(key)
+				this.scheduleSurfaceVariables()
+			}
+		}
+		step()
+		this.surfaceFades.set(key, setInterval(step, 40))
 	}
 
 	/**
@@ -543,6 +803,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	private stopSurfaceClient(): void {
 		if (this.surfaceFeedbackTimer) clearTimeout(this.surfaceFeedbackTimer)
 		this.surfaceFeedbackTimer = null
+		for (const t of this.surfaceFades.values()) clearInterval(t)
+		this.surfaceFades.clear()
+		if (this.surfaceVariablesTimer) clearTimeout(this.surfaceVariablesTimer)
+		this.surfaceVariablesTimer = null
 		if (this.surfaceDefsTimer) clearTimeout(this.surfaceDefsTimer)
 		this.surfaceDefsTimer = null
 		if (!this.surface) return
@@ -556,7 +820,24 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (this.surfaceFeedbackTimer) return
 		this.surfaceFeedbackTimer = setTimeout(() => {
 			this.surfaceFeedbackTimer = null
-			this.checkFeedbacks('surfaceTalk', 'surfaceSlotBypassed', 'surfaceRackOut', 'surfaceTbPreset')
+			this.checkFeedbacks(
+				'surfaceTalk',
+				'surfaceSlotBypassed',
+				'surfaceRackOut',
+				'surfaceTbPreset',
+				'surfaceMuted',
+				'surfaceSoloed',
+				'surfaceFaderLevel',
+				'surfaceMuteAll',
+				'surfaceMuteGroup',
+				'surfacePluginState',
+				'surfacePluginValue',
+				'surfaceLock',
+				'surfaceRecording',
+				'surfaceSoloActive',
+				'surfaceSceneDirty',
+				'surfaceScene',
+			)
 		}, 30)
 	}
 

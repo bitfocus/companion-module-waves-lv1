@@ -27,6 +27,29 @@ export interface ControlUpdate extends ControlAddress {
 	text: string
 }
 
+/** A value read in real-world units (dB, Hz…). */
+export interface RealUpdate extends ControlAddress {
+	mode: number
+	value: number
+	text: string
+}
+
+/** Properties of a control: plugin parameter name, range and their display texts. */
+export interface ControlProps extends ControlAddress {
+	min: number
+	max: number
+	step: number
+	name: string
+	minText: string
+	maxText: string
+}
+
+/** One of eMotion's state signals (mute groups, lock, scenes, tempo…). */
+export interface EmotionSignal {
+	name: string
+	args: unknown[]
+}
+
 /** A message between eMotion's surfaces (InterMapper); payload starts at the command header. */
 export interface InterMapMessage {
 	msg: number
@@ -50,6 +73,8 @@ function parseAddressed(parts: string[]): ControlAddress | null {
 	return { tt: n[0], track: n[1], group: n[2], secType: n[3], secIdx: n[4], cid: n[5] }
 }
 
+const MAX_INFLIGHT = 200
+
 export interface SurfaceClientOptions {
 	host: string
 	port: number
@@ -59,7 +84,8 @@ export interface SurfaceClientOptions {
 
 /**
  * Events: 'ready' (version), 'control' (ControlUpdate, from ctl and val lines),
- * 'intermap' (InterMapMessage, after `sub im 1`),
+ * 'intermap' (InterMapMessage, after `sub im 1`), 'real' (RealUpdate), 'props' (ControlProps),
+ * 'signal' (EmotionSignal),
  * 'driverError' (message), 'authFailed', 'close', 'error' (Error).
  */
 export class SurfaceClient extends EventEmitter {
@@ -70,6 +96,8 @@ export class SurfaceClient extends EventEmitter {
 	private lastRx = 0
 	private stopped = false
 	private ready = false
+	private pending: string[] = []
+	private inflight = 0
 	public version: string | null = null
 
 	constructor(private opts: SurfaceClientOptions) {
@@ -97,7 +125,46 @@ export class SurfaceClient extends EventEmitter {
 	}
 
 	getx(a: ControlAddress): void {
-		this.write(`getx ${addr(a)}`)
+		this.request(`getx ${addr(a)}`)
+	}
+
+	/** Write in eMotion's real-world units (dB, Hz…): WSMixerControl mode 3. Not queued. */
+	setReal(a: ControlAddress, value: number): void {
+		if (this.write(`setu 3 ${addr(a)} ${value}`)) this.inflight++
+	}
+
+	/** Read in real-world units; answered with a 'real' event. */
+	getReal(a: ControlAddress): void {
+		this.request(`getu 3 ${addr(a)}`)
+	}
+
+	/** Control properties (name, range); answered with a 'props' event. */
+	props(a: ControlAddress): void {
+		this.request(`props ${addr(a)}`)
+	}
+
+	/**
+	 * Reads are paced: at most MAX_INFLIGHT waiting for their answer. The driver queues 1024
+	 * commands and runs 64 per eMotion tick, so a connect-time burst of thousands of reads
+	 * would otherwise come back "busy" (and load the desk all at once).
+	 */
+	private request(line: string): void {
+		if (!this.ready) return
+		this.pending.push(line)
+		this.pump()
+	}
+
+	private pump(): void {
+		while (this.inflight < MAX_INFLIGHT && this.pending.length && this.sock) {
+			this.sock.write(this.pending.shift() + '\n')
+			this.inflight++
+		}
+	}
+
+	/** One answer to a request arrived (val / valu / props / err). */
+	private answered(): void {
+		if (this.inflight > 0) this.inflight--
+		this.pump()
 	}
 
 	write(line: string): boolean {
@@ -165,12 +232,53 @@ export class SurfaceClient extends EventEmitter {
 				return
 			}
 			case 'val': {
+				this.answered()
 				// val <addr×6> <rc> <value> <text…>
 				const a = parseAddressed(parts.slice(1))
 				const rc = parseInt(parts[7], 10)
 				const value = parseFloat(parts[8])
 				if (!a || rc !== 0 || !Number.isFinite(value)) return
 				this.emit('control', { ...a, value, text: parts.slice(9).join(' ') } satisfies ControlUpdate)
+				return
+			}
+			case 'valu': {
+				this.answered()
+				// valu <mode> <addr×6> <rc> <value> <text…>
+				const mode = parseInt(parts[1], 10)
+				const a = parseAddressed(parts.slice(2))
+				const rc = parseInt(parts[8], 10)
+				const value = parseFloat(parts[9])
+				if (!a || rc !== 0 || !Number.isFinite(value) || value === -12345) return
+				this.emit('real', { ...a, mode, value, text: parts.slice(10).join(' ') } satisfies RealUpdate)
+				return
+			}
+			case 'props': {
+				this.answered()
+				// props <addr×6> <rc> <min> <max> <step> <value> | @off='text' … | <hex>
+				const a = parseAddressed(parts.slice(1))
+				if (!a || parseInt(parts[7], 10) !== 0) return
+				const texts = line.split(' | ')[1] ?? ''
+				const at = (off: string) => (texts.match(new RegExp(`@${off}='([^']*)'`)) || [])[1] ?? ''
+				this.emit('props', {
+					...a,
+					min: parseFloat(parts[8]),
+					max: parseFloat(parts[9]),
+					step: parseFloat(parts[10]),
+					name: at('d0'),
+					minText: at('1fd'),
+					maxText: at('27d'),
+				} satisfies ControlProps)
+				return
+			}
+			case 'sig': {
+				// sig <name> <json array>: one of eMotion's own state signals
+				const json = line.slice(5 + parts[1].length)
+				try {
+					const args = JSON.parse(json) as unknown[]
+					this.emit('signal', { name: parts[1], args } satisfies EmotionSignal)
+				} catch {
+					// ignore a malformed line
+				}
 				return
 			}
 			case 'im': {
@@ -182,6 +290,7 @@ export class SurfaceClient extends EventEmitter {
 				return
 			}
 			case 'err':
+				if (parts[1] !== 'auth') this.answered()
 				if (parts[1] === 'auth') {
 					this.emit('authFailed')
 					return
@@ -213,6 +322,8 @@ export class SurfaceClient extends EventEmitter {
 	private teardown(): void {
 		this.ready = false
 		this.buf = ''
+		this.pending = []
+		this.inflight = 0
 		if (this.pingTimer) clearInterval(this.pingTimer)
 		this.pingTimer = null
 		const s = this.sock

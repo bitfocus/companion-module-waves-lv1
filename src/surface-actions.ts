@@ -2,62 +2,24 @@
 // inside eMotion LV1: controls by address, and eMotion's own shortcut functions (flips, Talk
 // Back presets, scenes…) pressed like a surface key. MyRemote is not used in this mode.
 
-import {
-	CompanionActionDefinitions,
-	CompanionFeedbackDefinitions,
-	CompanionInputFieldDropdown,
-	CompanionInputFieldTextInput,
-	combineRgb,
-	type DropdownChoice,
-} from '@companion-module/base'
+import { CompanionActionDefinitions, CompanionFeedbackDefinitions, combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
 import { SurfaceControls } from './surface.js'
-import { FLIP_ALL_SELECTION, SURFACE_MIXERS, SURFACE_TRACK_TYPES, TB_PRESET } from './surface-model.js'
+import { FLIP_ALL_SELECTION, SURFACE_MIXERS, TB_PRESET } from './surface-model.js'
 import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
-import { buildStateField, buildNumberExprField, resolveStateAsync, resolveNumberAsync } from './tracks.js'
-
-type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
-type ExprContext = Parameters<typeof resolveNumberAsync>[2]
-
-const SLOT_CHOICES = Array.from({ length: 8 }, (_, i) => ({ id: String(i), label: `Slot ${i + 1}` }))
-
-/** "tt:track" ids for every track the desk reported, labelled "Ch 1 — Kick". */
-function stripChoices(
-	self: LV1Instance,
-	types: readonly number[] = SURFACE_TRACK_TYPES.map((t) => t.tt),
-): DropdownChoice[] {
-	const out: DropdownChoice[] = []
-	for (const t of SURFACE_TRACK_TYPES) {
-		if (!types.includes(t.tt)) continue
-		for (const tr of self.surfaceModel.list(t.tt)) {
-			const label = `${t.label} ${tr.track + 1}`
-			out.push({ id: `${t.tt}:${tr.track}`, label: tr.name && tr.name !== label ? `${label} — ${tr.name}` : label })
-		}
-	}
-	return out
-}
-
-function stripField(self: LV1Instance, id = 'strip', label = 'Strip', types?: readonly number[]): AnyOpt {
-	const choices = stripChoices(self, types)
-	return { type: 'dropdown', id, label, default: choices[0]?.id ?? '0:0', choices }
-}
-
-function auxField(self: LV1Instance): AnyOpt {
-	return stripField(self, 'aux', 'Aux (FX / Monitor)', [2, 25])
-}
-
-function parseStrip(v: unknown): { tt: number; track: number } {
-	const [tt, track] = (typeof v === 'string' || typeof v === 'number' ? String(v) : '0:0')
-		.split(':')
-		.map((n) => parseInt(n, 10))
-	return { tt: Number.isFinite(tt) ? tt : 0, track: Number.isFinite(track) ? track : 0 }
-}
-
-function mixerField(withAll: boolean): AnyOpt {
-	const choices: DropdownChoice[] = SURFACE_MIXERS.map((m) => ({ id: m.id, label: m.label }))
-	if (withAll) choices.push({ id: 'all', label: 'All mixers' })
-	return { type: 'dropdown', id: 'mixer', label: 'Mixer', default: 'm1', choices }
-}
+import {
+	SLOT_CHOICES,
+	auxField,
+	buildNumberExprField,
+	desiredState,
+	mixerField,
+	onOffToggle,
+	parseStrip,
+	resolveNumberAsync,
+	stripField,
+	type AnyOpt,
+} from './surface-ui.js'
+import { featureActions, featureFeedbacks } from './surface-features.js'
 
 function phaseField(): AnyOpt {
 	return {
@@ -75,30 +37,6 @@ function phaseField(): AnyOpt {
 	}
 }
 
-/** on / off / toggle → the boolean to write, toggling from the last known value. */
-async function desiredState(
-	options: Record<string, unknown>,
-	context: ExprContext,
-	current: boolean,
-): Promise<boolean> {
-	const mode = await resolveStateAsync(options, 'state', context, 'toggle')
-	if (mode === 'on') return true
-	if (mode === 'off') return false
-	return !current
-}
-
-function onOffToggle(on: string, off: string): AnyOpt[] {
-	return buildStateField(
-		'state',
-		[
-			{ id: 'on', label: on },
-			{ id: 'off', label: off },
-			{ id: 'toggle', label: 'Toggle' },
-		],
-		'toggle',
-	)
-}
-
 export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 	const fnChoices = SURFACE_FUNCTIONS.map((f) => ({ id: String(f.id), label: f.name }))
 	const fnWith = (kinds: string[]) =>
@@ -107,6 +45,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 			.join(' || ')
 
 	return {
+		...featureActions(self),
 		surfaceFlip: {
 			name: 'Flip: Sends on fader',
 			description: 'Flip a mixer’s faders to an FX / Monitor aux, exactly like a Flip Sends user key in eMotion.',
@@ -201,6 +140,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 
 export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinitions {
 	return {
+		...featureFeedbacks(self),
 		surfaceFlip: {
 			type: 'boolean',
 			name: 'Flip: Mixer is flipped to aux',
