@@ -120,10 +120,6 @@ export interface DiscoverOptions {
 	onFound?: (entry: DiscoveryEntry) => void
 }
 
-export interface DiscoverHandle {
-	stop: () => void
-}
-
 /** Returned by `discover()` so callers can cancel an in-flight scan
  *  (e.g. on module `destroy()` or `configUpdated`). Awaiting `done`
  *  always resolves to the entries collected so far. */

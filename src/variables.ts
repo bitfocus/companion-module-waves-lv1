@@ -25,8 +25,8 @@ export function UpdateVariables(self: LV1Instance): void {
 		defs.push({ variableId: `${slug}_trim`, name: `${label} — digital trim (read-only)` })
 		defs.push({ variableId: `${slug}_pan`, name: `${label} — pan (-1..+1)` })
 		defs.push({ variableId: `${slug}_width`, name: `${label} — stereo width (0..1)` })
-		defs.push({ variableId: `${slug}_balance`, name: `${label} — stereo balance (-1..+1)` })
-		defs.push({ variableId: `${slug}_stereo`, name: `${label} — stereo strip (on/off, v17+)` })
+		defs.push({ variableId: `${slug}_balance`, name: `${label} — stereo balance (-1..+1, blank = unknown)` })
+		defs.push({ variableId: `${slug}_stereo`, name: `${label} — stereo strip (on/off, blank = unknown; v17+)` })
 		if (self.config.readIoPatch) {
 			defs.push({ variableId: `${slug}_patch`, name: `${label} — I/O patch (experimental)` })
 		}
@@ -93,7 +93,7 @@ export function pushAll(self: LV1Instance): void {
 		values[`${slug}_pan`] = s?.pan != null ? s.pan.toFixed(2) : ''
 		values[`${slug}_width`] = s?.width != null ? s.width.toFixed(2) : ''
 		values[`${slug}_balance`] = s?.balance != null ? s.balance.toFixed(2) : ''
-		values[`${slug}_stereo`] = s?.stereo ? 'on' : 'off'
+		values[`${slug}_stereo`] = s?.stereo == null ? '' : s.stereo ? 'on' : 'off'
 		if (self.config.readIoPatch) values[`${slug}_patch`] = (self.ioPatch.get(`${group}.${ch}`) ?? []).join(' + ')
 		values[`${slug}_color`] = s?.color ? toHex(s.color) : ''
 		// Blank, NOT 'off', when the console has not told us. See ChannelState.phantom.
@@ -110,6 +110,7 @@ export function pushAll(self: LV1Instance): void {
 	values['scene_count'] = self.scenes.size
 	values['channels_total'] = self.effectiveChannels()
 	values['auxes_total'] = self.effectiveAuxes()
+	values['console_version'] = self.consoleVersion ?? ''
 	if (self.config.readIoPatch) values['io_patch_connections'] = self.ioPatchRows ?? ''
 	// Flip state — same logic as pushFlipVariables() in main.ts (kept in sync).
 	const t = self.currentFlipTarget
@@ -169,7 +170,7 @@ export function pushTrack(
 	if (prop === 'trim') v[`${slug}_trim`] = s.trim != null ? s.trim.toFixed(1) : ''
 	if (prop === 'pan') v[`${slug}_pan`] = s.pan != null ? s.pan.toFixed(2) : ''
 	if (prop === 'width') v[`${slug}_width`] = s.width != null ? s.width.toFixed(2) : ''
-	if (prop === 'balance') v[`${slug}_balance`] = s.balance.toFixed(2)
+	if (prop === 'balance') v[`${slug}_balance`] = s.balance != null ? s.balance.toFixed(2) : ''
 	if (prop === 'name') v[`${slug}_name`] = s.name ?? ''
 	if (prop === 'color') v[`${slug}_color`] = s.color ? toHex(s.color) : ''
 	if (prop === 'polarity') v[`${slug}_polarity`] = s.polarity == null ? '' : s.polarity ? 'on' : 'off'

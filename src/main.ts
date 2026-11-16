@@ -15,7 +15,7 @@ import { UpdateFeedbacks } from './feedbacks.js'
 import { UpdatePresets } from './presets.js'
 import { UpgradeScripts } from './upgrades.js'
 import { OscTcpClient } from './osc-tcp.js'
-import { discover, multicastInterfaces } from './zdns-discover.js'
+import { discover, multicastInterfaces, type DiscoverHandle } from './zdns-discover.js'
 import { cancelDiscovery, ensureInitialScan, findInCache, refreshDiscovery } from './discovery-cache.js'
 import { OscMessage, intArg, boolArg } from './osc.js'
 import { UpdateVariables, pushTrack as pushTrackVariable } from './variables.js'
@@ -37,10 +37,11 @@ interface ChannelState {
 	name: string | null
 	pan: number // -1 (full L) … +1 (full R), 0 = center
 	width: number // 0 (mono) … 1 (full stereo)
-	/** Stereo balance, -1 … +1. Only meaningful on stereo strips. */
-	balance: number
-	/** Stereo strip (from /Channels record field 16: 1 = mono, 2 = stereo). */
-	stereo: boolean
+	/** Stereo balance, -1 … +1. Only meaningful on stereo strips. null until the desk reports it. */
+	balance: number | null
+	/** Stereo strip (from /Channels record field 16: 1 = mono, 2 = stereo). null = unknown
+	 *  (not reported yet, or a v16 desk, where the field is not read). */
+	stereo: boolean | null
 	/** Preamp / input gain, dB. From /Notify/TrackInGain, sub-index 0. null until published. */
 	inGain: number | null
 	/** Digital trim, dB. From /Notify/TrackTrim, sub-index 0. null until published. */
@@ -108,6 +109,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 
 	/** eMotion LV1 major version (from /Notify/ServiceVersion or /version). null = unknown. */
 	public consoleMajor: number | null = null
+	/** Full version label, e.g. "v.17.6.26.456". null = unknown. */
+	public consoleVersion: string | null = null
 
 	/** v16/v17 aux addressing (FX + Monitor) — see aux-map.ts. */
 	public auxMap = new AuxMap()
@@ -126,6 +129,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  does not — observed on v17 — and it is the only source of names/faders). */
 	private channelsWatchdog: NodeJS.Timeout | null = null
 	private channelsSeen = false
+	/** One-shot zDNS scan started by connectIfReady(); stopped on destroy / reconfigure
+	 *  so its multicast socket does not outlive the connection. */
+	private connectScan: DiscoverHandle | null = null
 
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
@@ -184,6 +190,13 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.stopIoPatchClient()
 		if (this.channelsWatchdog) clearTimeout(this.channelsWatchdog)
 		this.channelsWatchdog = null
+		this.stopConnectScan()
+	}
+
+	private stopConnectScan(): void {
+		const scan = this.connectScan
+		this.connectScan = null
+		scan?.stop()
 	}
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
@@ -228,7 +241,22 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.currentScene = null
 			this.currentSceneName = null
 			this.lastTempoBpm = null
+			// The next desk may be a different version — re-learn it before decoding
+			// any v17-only /Channels fields.
+			this.consoleMajor = null
+			this.consoleVersion = null
+			this.channelsSeen = false
+			if (this.channelsWatchdog) clearTimeout(this.channelsWatchdog)
+			this.channelsWatchdog = null
+			// Redraw everything from the now-empty state, so no button keeps showing the
+			// previous desk (phantom in particular is only reported on change).
+			this.updateActions()
+			this.updateFeedbacks()
+			this.updatePresets()
+			this.updateVariables()
+			this.checkFeedbacks()
 			cancelDiscovery()
+			this.stopConnectScan()
 			await this.connectIfReady()
 		}
 	}
@@ -283,7 +311,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (!host || !port) {
 			this.updateStatus(InstanceStatus.Connecting, 'Discovering LV1…')
 			this.log('info', `Running zDNS discovery (host filter: ${host || 'none'})`)
-			const entries = await discover({
+			const scan = discover({
 				timeoutMs: 6000,
 				filterHostIp: host || undefined,
 				// Surface bind failures and the interface list into the Companion log —
@@ -291,7 +319,12 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				// it reads the same whether the desk is off, on another subnet, or the
 				// discovery socket never bound at all.
 				onDiagnostic: (level, message) => this.log(level, message),
-			}).done
+			})
+			this.connectScan = scan
+			const entries = await scan.done
+			// Cancelled by destroy() or a newer configUpdated() — that caller owns the next step.
+			if (this.connectScan !== scan) return
+			this.connectScan = null
 			if (!entries.length) {
 				const ifaces = multicastInterfaces()
 				const where = ifaces.length
@@ -349,8 +382,16 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			handshakeStyle: 'tracks',
 			autoReconnect: true,
 		})
-		io.on('registered', () => this.log('info', 'I/O patch connection registered (recorder client type)'))
-		io.on('error', (err: Error) => this.log('debug', `I/O patch connection: ${err.message}`))
+		let failing = false
+		io.on('registered', () => {
+			failing = false
+			this.log('info', 'I/O patch connection registered (recorder client type)')
+		})
+		io.on('error', (err: Error) => {
+			// Warn once per outage; the 3 s retries after that only go to debug.
+			this.log(failing ? 'debug' : 'warn', `I/O patch connection: ${err.message} — retrying`)
+			failing = true
+		})
 		io.on('packet', ({ decoded }: { decoded: OscMessage }) => {
 			if (decoded.address === '/Notify/IOConnections') this.handleIoConnections(decoded)
 		})
@@ -417,6 +458,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		}
 		this.log('info', `Rediscovered ${this.lastHost} on port ${match.port} — reconnecting`)
 		this.osc.updateTarget(this.lastHost, match.port)
+		// The I/O-patch connection talks to the same desk — move it too.
+		this.ioOsc?.updateTarget(this.lastHost, match.port)
 	}
 
 	private bindOscEvents(osc: OscTcpClient): void {
@@ -711,7 +754,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				if (this.consoleMajor !== major) this.log('info', `eMotion LV1 major version ${major}`)
 				this.consoleMajor = major
 				const label = m.args[0]?.type === 's' ? m.args[0].value : null
-				if (label) this.setVariableValues({ console_version: label })
+				if (label) {
+					this.consoleVersion = label
+					this.setVariableValues({ console_version: label })
+				}
 				break
 			}
 			case '/Notify/Balance': {
@@ -858,10 +904,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 					const mute = num(6)
 					const legs = num(16)
 					const pan = num(18)
-					if (balance != null) s.balance = balance
 					// Link/DCA records carry -1 in several int fields — only trust 0/1 / 1|2.
 					if (mute === 0 || mute === 1) s.muted = mute === 1
 					if (legs === 1 || legs === 2) s.stereo = legs === 2
+					// Balance only exists on stereo strips; mono strips carry a meaningless 0 here.
+					if (balance != null && s.stereo) s.balance = balance
 					if (pan != null) s.pan = pan
 					const maskArg = args[base + 17]
 					if (maskArg?.type === 'h') masks.push({ g: group, ch, mask: BigInt(maskArg.value) })
@@ -1174,8 +1221,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				name: null,
 				pan: 0,
 				width: 1,
-				balance: 0,
-				stereo: false,
+				balance: null,
+				stereo: null,
 				inGain: null,
 				trim: null,
 				polarity: null,

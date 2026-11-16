@@ -452,7 +452,10 @@ export function buildRouteDestOptions(
 	forAction = true,
 ): Array<CompanionInputFieldDropdown | CompanionInputFieldTextInput> {
 	const kinds = ROUTE_KINDS.filter((k) => !forAction || !k.feedbackOnly)
-	const singles = ROUTE_KINDS.filter((k) => k.single).map((k) => k.id)
+	// Hide the number field for single-instance destinations and for Aux (which has
+	// its own picker). Built as a Companion expression, not an isVisible function.
+	const hideIdx = [...ROUTE_KINDS.filter((k) => k.single).map((k) => k.id), 'aux']
+	const showIdx = hideIdx.map((id) => `$(options:destKind) != '${id}'`).join(' && ')
 	return [
 		{
 			id: 'destKind',
@@ -468,9 +471,7 @@ export function buildRouteDestOptions(
 			tooltip: 'e.g. 1 = Group 1 / Matrix 1 / DCA 1 / mute group 1. Variables OK.',
 			default: '1',
 			useVariables: true,
-			isVisible: (opts: Record<string, unknown>, data: { hide: string[] }) =>
-				!data.hide.includes(String(opts.destKind)),
-			isVisibleData: { hide: [...singles, 'aux'] },
+			isVisibleExpression: showIdx,
 		},
 		{
 			id: 'destAux',
@@ -478,7 +479,7 @@ export function buildRouteDestOptions(
 			label: 'Aux (FX / Monitor)',
 			default: 1,
 			choices: withCustomOption(channelsFor(self, 2)),
-			isVisible: (opts: Record<string, unknown>) => opts.destKind === 'aux',
+			isVisibleExpression: "$(options:destKind) == 'aux'",
 		},
 		{
 			id: 'destAux_expr',
@@ -487,9 +488,7 @@ export function buildRouteDestOptions(
 			tooltip: '1-based aux index as listed above (FX first, then Monitors).',
 			default: '',
 			useVariables: true,
-			isVisible: (opts: Record<string, unknown>, data: { custom: string }) =>
-				opts.destKind === 'aux' && opts.destAux === data.custom,
-			isVisibleData: { custom: CUSTOM_EXPR },
+			isVisibleExpression: `$(options:destKind) == 'aux' && $(options:destAux) == '${CUSTOM_EXPR}'`,
 		},
 	]
 }
