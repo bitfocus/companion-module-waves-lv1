@@ -29,19 +29,6 @@ const YELLOW = combineRgb(220, 180, 0)
 const GREEN = combineRgb(0, 140, 0)
 const BLUE = combineRgb(0, 120, 200)
 
-/** Preset category per track type. */
-const CATEGORY: Record<number, string> = {
-	0: 'Channels',
-	1: 'Groups',
-	2: 'FX',
-	25: 'Monitors',
-	6: 'Matrix',
-	12: 'Links',
-	3: 'Masters',
-	4: 'Masters',
-	5: 'Masters',
-}
-
 function button(
 	category: string,
 	name: string,
@@ -119,25 +106,25 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 		}
 	}
 
-	// ── Strips: mute, solo, fader moves / fades, plugin switches ──
+	// ── One example strip (Channel 1): mute, solo, fader moves / fades, plugin switches. Users copy
+	// these and pick their own strip in the action. ──
 	for (const t of SURFACE_TRACK_TYPES) {
-		if (!STRIP_TYPES.includes(t.tt)) continue
-		const cat = CATEGORY[t.tt] ?? t.label
-		for (const tr of self.surfaceModel.list(t.tt)) {
+		if (t.tt !== 0) continue
+		for (const tr of self.surfaceModel.list(t.tt).slice(0, 1)) {
 			const slug = slugOf(t, tr.track)
 			const id = `${t.tt}:${tr.track}`
 			const name = `$(${label}:${slug}_name)`
 			const level = `$(${label}:${slug}_fader)`
-			const who = t.max === 1 ? t.label : `${t.label} ${tr.track + 1}`
+			const who = `${t.label} ${tr.track + 1}`
 			presets[`mute_${slug}`] = button(
-				`Mute: ${cat}`,
+				'Channel 1 (example)',
 				`Mute ${who}`,
 				`MUTE\n${name}`,
 				[{ actionId: 'surfaceMute', options: { strip: id, state: 'toggle', state_expr: '' } }],
 				[{ feedbackId: 'surfaceMuted', options: { strip: id }, style: { bgcolor: RED, color: WHITE } }],
 			)
 			presets[`solo_${slug}`] = button(
-				`Solo: ${cat}`,
+				'Channel 1 (example)',
 				`Solo ${who}`,
 				`SOLO\n${name}`,
 				[{ actionId: 'surfaceSolo', options: { strip: id, state: 'toggle', state_expr: '' } }],
@@ -148,21 +135,21 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 				options: { strip: id, mode, db, fade: fadeMs !== '', fadeMs: fadeMs || '1000', curve: 'ease' },
 			})
 			presets[`fadein_${slug}`] = button(
-				`Fader: ${cat}`,
+				'Channel 1 (example)',
 				`${who}: fade in to 0 dB (2 s)`,
 				`${name}\nFADE IN\n${level}`,
 				[fader('set', '0', '2000')],
 			)
 			presets[`fadeout_${slug}`] = button(
-				`Fader: ${cat}`,
+				'Channel 1 (example)',
 				`${who}: fade out to −∞ (2 s)`,
 				`${name}\nFADE OUT\n${level}`,
 				[fader('set', '-144', '2000')],
 			)
-			presets[`up_${slug}`] = button(`Fader: ${cat}`, `${who}: +1 dB`, `${name}\n+1 dB\n${level}`, [
+			presets[`up_${slug}`] = button('Channel 1 (example)', `${who}: +1 dB`, `${name}\n+1 dB\n${level}`, [
 				fader('inc', '1', ''),
 			])
-			presets[`down_${slug}`] = button(`Fader: ${cat}`, `${who}: −1 dB`, `${name}\n−1 dB\n${level}`, [
+			presets[`down_${slug}`] = button('Channel 1 (example)', `${who}: −1 dB`, `${name}\n−1 dB\n${level}`, [
 				fader('dec', '1', ''),
 			])
 
@@ -180,7 +167,7 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 					side: 'both',
 				}
 				presets[`${key}_${slug}`] = button(
-					`Plugins: ${cat}`,
+					'Channel 1 (example)',
 					`${who}: ${pluginName} ${param}`,
 					`${text}\n${name}`,
 					[
@@ -204,7 +191,7 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 			const eqSlot = slots.indexOf('EMO-Q4')
 			if (eqSlot >= 0) {
 				presets[`eq_${slug}`] = button(
-					`Plugins: ${cat}`,
+					'Channel 1 (example)',
 					`${who}: EQ (EMO-Q4) in / out`,
 					`EQ\n${name}`,
 					[
@@ -341,7 +328,10 @@ export function surfaceVariableDefinitions(self: LV1Instance): Array<{ variableI
 			defs.push({ variableId: `${slug}_name`, name: `${label} name` })
 			if (!STRIP_TYPES.includes(t.tt)) continue
 			defs.push({ variableId: `${slug}_fader`, name: `${label} fader (dB)` })
-			defs.push({ variableId: `${slug}_mute`, name: `${label} mute (on / off)` })
+			defs.push({
+				variableId: `${slug}_mute`,
+				name: `${label} mute (on / off / group = muted by a group, Mute All or DCA)`,
+			})
 			defs.push({ variableId: `${slug}_solo`, name: `${label} solo (on / off)` })
 		}
 	}
@@ -381,7 +371,8 @@ export function surfaceVariableValues(self: LV1Instance): Record<string, string>
 			v[`${slug}_fader`] = db == null ? '' : db <= -144 ? '-inf' : db.toFixed(1)
 			const mute = self.surfaceControls.get(controlKey(strip.mute(t.tt, tr.track)))
 			const solo = self.surfaceControls.get(controlKey(strip.solo(t.tt, tr.track)))
-			v[`${slug}_mute`] = mute ? (mute.value >= 0.5 ? 'on' : 'off') : ''
+			const ms = mute ? Math.round(mute.value) : null
+			v[`${slug}_mute`] = ms == null ? '' : ms === 2 ? 'group' : ms ? 'on' : 'off'
 			v[`${slug}_solo`] = solo ? (solo.value >= 0.5 ? 'on' : 'off') : ''
 		}
 	}

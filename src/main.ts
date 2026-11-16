@@ -479,6 +479,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		s.on('control', (c: ControlUpdate) => {
 			this.surfaceControls.set(controlKey(c), c)
+			this.surfaceWatchImplicitMutes(c)
 			this.surfaceLearn(c)
 			const kind = this.surfaceModel.applyControl(c)
 			if (kind === 'names') this.scheduleSurfaceDefinitions()
@@ -487,7 +488,16 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		s.on('real', (r: RealUpdate) => {
 			if (r.mode !== 3) return
-			this.surfaceModel.real.set(controlKey(r), r.value)
+			const key = controlKey(r)
+			if (r.group === 7 && r.cid === 0) {
+				this.surfaceModel.real.set(key, r.value)
+			} else {
+				// On / off controls are read in real-world mode (raw reads can be wrong after plugin-slot reads).
+				const c: ControlUpdate = { ...r }
+				this.surfaceControls.set(key, c)
+				if (this.surfaceModel.applyControl(c) === 'tb') this.pushSurfaceVariables()
+				this.surfaceWatchImplicitMutes(c)
+			}
 			this.scheduleSurfaceFeedbacks()
 			this.scheduleSurfaceVariables()
 		})
@@ -496,6 +506,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			if (slot && this.surfaceModel.applyProps(slot.code, slot.name, p)) this.scheduleSurfaceDefinitions()
 		})
 		s.on('signal', (sig: EmotionSignal) => {
+			if (sig.name === 'muteGroupStateChanged') this.surfaceScheduleMuteReread()
 			if (!this.surfaceModel.applySignal(sig.name, sig.args)) return
 			this.scheduleSurfaceFeedbacks()
 			this.scheduleSurfaceVariables()
@@ -563,8 +574,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			for (const tr of this.surfaceModel.list(t.tt)) {
 				const i = tr.track
 				s.getReal(strip.fader(t.tt, i))
-				s.getx(strip.mute(t.tt, i))
-				s.getx(strip.solo(t.tt, i))
+				s.getReal(strip.mute(t.tt, i))
+				s.getReal(strip.solo(t.tt, i))
 				if (!RACK_TYPES.includes(t.tt)) continue
 				for (let slot = 0; slot < RACK_SLOTS; slot++) {
 					s.getx(strip.slotName(t.tt, i, slot))
@@ -572,8 +583,64 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				}
 			}
 		}
-		for (let g = 0; g < MUTE_GROUPS; g++) s.getx(muteGroupAddress(g))
-		s.getx(MUTE_ALL)
+		for (let g = 0; g < MUTE_GROUPS; g++) s.getReal(muteGroupAddress(g))
+		s.getReal(MUTE_ALL)
+	}
+
+	/** Strip mute: 0 off, 1 muted by its own button, 2 muted by Mute All / a mute group / a DCA. */
+	surfaceMuteState(tt: number, track: number): number | null {
+		const v = this.surfaceValue(strip.mute(tt, track))
+		return v == null ? null : Math.round(v)
+	}
+
+	/**
+	 * The desk's mute button cycle: muted by a group (2) → unmuted (0) → muted (1) → back to
+	 * following the group (2). Writing 2 with nothing muting the strip leaves it unmuted, so
+	 * without groups this is a plain on / off.
+	 */
+	surfaceMuteCycle(tt: number, track: number): void {
+		const cur = this.surfaceMuteState(tt, track) ?? 0
+		this.surfaceSet(strip.mute(tt, track), cur === 2 ? 0 : cur === 0 ? 1 : 2)
+		if (cur === 1) setTimeout(() => this.surface?.getReal(strip.mute(tt, track)), 150)
+	}
+
+	/** Mute All, mute groups and DCA / Link mutes change other strips' mute without telling them. */
+	private surfaceWatchImplicitMutes(c: ControlUpdate): void {
+		if (c.group !== 7 || c.cid !== 11) return
+		if (c.tt === 16 || c.tt === 13 || c.tt === 12) this.surfaceScheduleMuteReread()
+	}
+
+	private surfaceMuteRereadTimer: NodeJS.Timeout | null = null
+	private surfaceScheduleMuteReread(): void {
+		if (this.surfaceMuteRereadTimer) return
+		this.surfaceMuteRereadTimer = setTimeout(() => {
+			this.surfaceMuteRereadTimer = null
+			const s = this.surface
+			if (!s?.isReady()) return
+			for (const t of SURFACE_TRACK_TYPES) {
+				if (!STRIP_TYPES.includes(t.tt) || t.tt === 12) continue
+				for (const tr of this.surfaceModel.list(t.tt)) s.getReal(strip.mute(t.tt, tr.track))
+			}
+		}, 200)
+	}
+
+	/** Blink phase for strips muted by a group (value 2), like the desk's mute buttons. */
+	public surfaceBlinkOn = true
+	private surfaceBlinkTimer: NodeJS.Timeout | null = null
+	private surfaceUpdateBlink(): void {
+		const anyImplicit = [...this.surfaceControls.entries()].some(
+			([k, c]) => k.endsWith('.7.-1.-1.11') && Math.round(c.value) === 2,
+		)
+		if (anyImplicit && !this.surfaceBlinkTimer) {
+			this.surfaceBlinkTimer = setInterval(() => {
+				this.surfaceBlinkOn = !this.surfaceBlinkOn
+				this.checkFeedbacks('surfaceMuted')
+			}, 500)
+		} else if (!anyImplicit && this.surfaceBlinkTimer) {
+			clearInterval(this.surfaceBlinkTimer)
+			this.surfaceBlinkTimer = null
+			this.surfaceBlinkOn = true
+		}
 	}
 
 	/** Facts learned from control reports: fader dB from its display, plugins in slots, parameter scales. */
@@ -805,6 +872,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.surfaceFeedbackTimer = null
 		for (const t of this.surfaceFades.values()) clearInterval(t)
 		this.surfaceFades.clear()
+		if (this.surfaceBlinkTimer) clearInterval(this.surfaceBlinkTimer)
+		this.surfaceBlinkTimer = null
+		if (this.surfaceMuteRereadTimer) clearTimeout(this.surfaceMuteRereadTimer)
+		this.surfaceMuteRereadTimer = null
 		if (this.surfaceVariablesTimer) clearTimeout(this.surfaceVariablesTimer)
 		this.surfaceVariablesTimer = null
 		if (this.surfaceDefsTimer) clearTimeout(this.surfaceDefsTimer)
@@ -820,6 +891,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (this.surfaceFeedbackTimer) return
 		this.surfaceFeedbackTimer = setTimeout(() => {
 			this.surfaceFeedbackTimer = null
+			this.surfaceUpdateBlink()
 			this.checkFeedbacks(
 				'surfaceTalk',
 				'surfaceSlotBypassed',
@@ -860,7 +932,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (c) return c.value
 		if (this.surface?.isReady() && !this.surfaceAsked.has(key)) {
 			this.surfaceAsked.add(key)
-			this.surface.getx(a)
+			// Plugin slots, their parameters and names only have raw values; on / off controls are
+			// read in real-world mode (raw reads of them can be wrong right after plugin-slot reads).
+			if (a.group === 4 || a.group === 8) this.surface.getx(a)
+			else this.surface.getReal(a)
 		}
 		return null
 	}

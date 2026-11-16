@@ -24,6 +24,7 @@ import {
 	resolveNumberAsync,
 	stripField,
 	valueModeField,
+	resolveStateAsync,
 } from './surface-ui.js'
 
 const RED = combineRgb(200, 0, 0)
@@ -141,11 +142,15 @@ export function featureActions(self: LV1Instance): CompanionActionDefinitions {
 
 		surfaceMute: {
 			name: 'Strip: Mute',
+			description:
+				'Toggle works like the mute button on the desk: muted by a mute group / Mute All / DCA → unmuted → muted → back to following the group.',
 			options: [stripField(self, 'strip', 'Strip', STRIP_TYPES), ...onOffToggle('Mute', 'Unmute')],
 			callback: async (a, context) => {
 				const { tt, track } = parseStrip(a.options.strip)
-				const addr = strip.mute(tt, track)
-				self.surfaceSetBool(addr, await desiredState(a.options, context, self.surfaceBool(addr)))
+				const mode = await resolveStateAsync(a.options, 'state', context, 'toggle')
+				if (mode === 'on') self.surfaceSet(strip.mute(tt, track), 1)
+				else if (mode === 'off') self.surfaceSet(strip.mute(tt, track), 0)
+				else self.surfaceMuteCycle(tt, track)
 			},
 		},
 
@@ -242,11 +247,18 @@ export function featureFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 		surfaceMuted: {
 			type: 'boolean',
 			name: 'Strip: Muted',
+			description:
+				'On while the strip is muted. Blinks, like the desk, when it is muted by a mute group, Mute All or a DCA.',
 			defaultStyle: { bgcolor: RED, color: WHITE },
-			options: [stripField(self, 'strip', 'Strip', STRIP_TYPES)],
+			options: [
+				stripField(self, 'strip', 'Strip', STRIP_TYPES),
+				{ type: 'checkbox', id: 'blink', label: 'Blink when muted by a group / Mute All / DCA', default: true },
+			],
 			callback: (fb) => {
 				const { tt, track } = parseStrip(fb.options.strip)
-				return self.surfaceBool(strip.mute(tt, track))
+				const state = self.surfaceMuteState(tt, track)
+				if (state === 2) return fb.options.blink === false ? true : self.surfaceBlinkOn
+				return state === 1 || state === 3
 			},
 		},
 		surfaceSoloed: {

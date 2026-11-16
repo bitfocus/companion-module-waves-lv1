@@ -133,4 +133,4 @@ export async function resolveFade(
 	return { ms, curve }
 }
 
-export { buildNumberExprField, resolveNumberAsync }
+export { buildNumberExprField, resolveNumberAsync, resolveStateAsync }
