@@ -229,7 +229,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			!!this.config.readIoPatch !== !!config.readIoPatch ||
 			(this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote') ||
 			this.config.surfacePort !== config.surfacePort ||
-			this.config.surfacePassword !== config.surfacePassword
+			this.config.surfacePassword !== config.surfacePassword ||
+			this.config.surfaceHost !== config.surfaceHost
 		this.config = config
 
 		this.updateActions()
@@ -337,6 +338,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 
 		// Companion Surface mode only needs the desk computer's IP: the driver has a fixed port.
 		const surfaceMode = this.config.mode === 'surface'
+		if (surfaceMode && this.config.surfaceHost?.trim()) {
+			this.lastHost = this.config.surfaceHost.trim()
+			this.startSurfaceClient(this.lastHost)
+			return
+		}
 
 		// Priority 3: if we still have no host or no port, try a one-shot discovery.
 		if (!host || (!port && !surfaceMode)) {
