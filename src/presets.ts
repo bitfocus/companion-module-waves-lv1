@@ -3,11 +3,12 @@
 
 import { CompanionPresetDefinitions, combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { surfacePresets } from './surface-presets.js'
 
 export function UpdatePresets(self: LV1Instance): void {
-	// These presets use MyRemote actions; Companion Surface mode has none of them.
+	// These presets use MyRemote actions; Companion Surface mode has its own.
 	if (self.config.mode === 'surface') {
-		self.setPresetDefinitions({})
+		self.setPresetDefinitions(surfacePresets(self))
 		return
 	}
 	const presets: CompanionPresetDefinitions = {}

@@ -7,14 +7,16 @@
 
 import type { CompanionVariableDefinition, CompanionVariableValues } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { surfaceVariableDefinitions, surfaceVariableValues } from './surface-presets.js'
 import { enumerateTracks, trackLabel, trackSlug } from './tracks.js'
 
 export { trackSlug }
 
 export function UpdateVariables(self: LV1Instance): void {
-	// These variables are filled from MyRemote; Companion Surface mode does not connect to it.
+	// These variables are filled from MyRemote; Companion Surface mode has its own.
 	if (self.config.mode === 'surface') {
-		self.setVariableDefinitions([])
+		self.setVariableDefinitions(surfaceVariableDefinitions(self))
+		self.setVariableValues(surfaceVariableValues(self))
 		return
 	}
 	const defs: CompanionVariableDefinition[] = []

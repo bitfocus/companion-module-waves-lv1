@@ -33,6 +33,9 @@ import { MASK_GROUPS, decodeRouteMask, isTalkBackDest, routeKey } from './routin
 import { parseIOConnections, rowLabel, rowTrack } from './io-connections.js'
 import { SurfaceClient, controlKey, type ControlAddress, type ControlUpdate } from './surface-client.js'
 import { SURFACE_DEFAULT_PORT, SURFACE_DRIVER_VERSION, compareVersions, surfaceInstallPage } from './surface.js'
+import { SurfaceModel } from './surface-model.js'
+import { surfaceVariableValues } from './surface-presets.js'
+import type { InterMapMessage } from './surface-client.js'
 
 interface ChannelState {
 	muted: boolean
@@ -153,6 +156,12 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	private surfaceFeedbackTimer: NodeJS.Timeout | null = null
 	/** The MyRemote connection is registered. */
 	private myRemoteOk = false
+	/** Desk state learned from the driver: track names, flips, Talk Back preset. */
+	public surfaceModel = new SurfaceModel()
+	/** eMotion shortcuts registered on our surface this connection: `${fn}.${sel}.${tt}.${track}` → slot. */
+	private surfaceKeys = new Map<string, number>()
+	private nextSurfaceSlot = 1
+	private surfaceDefsTimer: NodeJS.Timeout | null = null
 
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
@@ -246,6 +255,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.stopIoPatchClient()
 			this.stopSurfaceClient()
 			this.surfaceControls.clear()
+			this.surfaceModel.reset()
 			this.myRemoteOk = false
 			// L3: clear all mixer-state derived from the previous host so feedbacks
 			// don't briefly render the old mixer's values during the cross-over, and
@@ -430,6 +440,12 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		s.on('ready', (version: string | null) => {
 			failing = false
 			this.surfaceAsked.clear()
+			this.surfaceModel.reset()
+			this.surfaceKeys.clear()
+			this.nextSurfaceSlot = 1
+			// Flip state comes from eMotion's InterMapper messages; names and counts from the tracks.
+			s.write('sub im 1')
+			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
 			this.surfaceProblem =
 				version && compareVersions(version, SURFACE_DRIVER_VERSION) < 0
 					? `Companion Surface ${version} on the desk is older than ${SURFACE_DRIVER_VERSION} — reinstall it from the install page`
@@ -441,7 +457,15 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		s.on('control', (c: ControlUpdate) => {
 			this.surfaceControls.set(controlKey(c), c)
+			const kind = this.surfaceModel.applyControl(c)
+			if (kind === 'names') this.scheduleSurfaceDefinitions()
+			else if (kind === 'tb') this.pushSurfaceVariables()
 			this.scheduleSurfaceFeedbacks()
+		})
+		s.on('intermap', (m: InterMapMessage) => {
+			if (!this.surfaceModel.applyInterMap(m)) return
+			this.checkFeedbacks('surfaceFlip')
+			this.pushSurfaceVariables()
 		})
 		s.on('authFailed', () => {
 			if (this.surfaceProblem === rejected) return
@@ -464,9 +488,63 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		s.connect()
 	}
 
+	/** Track names / counts changed: rebuild the dropdowns, presets and variables once. */
+	private scheduleSurfaceDefinitions(): void {
+		if (this.surfaceDefsTimer) return
+		this.surfaceDefsTimer = setTimeout(() => {
+			this.surfaceDefsTimer = null
+			this.updateActions()
+			this.updateFeedbacks()
+			this.updatePresets()
+			this.updateVariables()
+			this.checkFeedbacks()
+		}, 400)
+	}
+
+	private pushSurfaceVariables(): void {
+		this.setVariableValues(surfaceVariableValues(this))
+	}
+
+	/**
+	 * Runs an eMotion shortcut function (WCUserKeyHandler action code) the way a surface key does:
+	 * the first time, register it on our surface (its own slot), then press and release it.
+	 */
+	surfaceRunFunction(
+		fn: number,
+		selection: number,
+		tt: number,
+		track: number,
+		phase: 'tap' | 'down' | 'up' = 'tap',
+	): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const press = (slot: number) => {
+			if (phase !== 'up') s.write(`ukdown ${slot}`)
+			if (phase !== 'down') s.write(`ukup ${slot}`)
+		}
+		const key = `${fn}.${selection}.${tt}.${track}`
+		const known = this.surfaceKeys.get(key)
+		if (known != null) {
+			press(known)
+			return
+		}
+		const slot = this.nextSurfaceSlot++
+		this.surfaceKeys.set(key, slot)
+		s.write(`ukreg ${slot} ${fn} ${selection} ${tt} ${track}`)
+		// eMotion stores the shortcut on its GUI thread a moment after the registration.
+		setTimeout(() => {
+			if (this.surface === s && s.isReady()) press(slot)
+		}, 250)
+	}
+
 	private stopSurfaceClient(): void {
 		if (this.surfaceFeedbackTimer) clearTimeout(this.surfaceFeedbackTimer)
 		this.surfaceFeedbackTimer = null
+		if (this.surfaceDefsTimer) clearTimeout(this.surfaceDefsTimer)
+		this.surfaceDefsTimer = null
 		if (!this.surface) return
 		this.surface.removeAllListeners()
 		this.surface.disconnect()
@@ -478,7 +556,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		if (this.surfaceFeedbackTimer) return
 		this.surfaceFeedbackTimer = setTimeout(() => {
 			this.surfaceFeedbackTimer = null
-			this.checkFeedbacks('surfaceTalk', 'surfaceSlotBypassed', 'surfaceRackOut')
+			this.checkFeedbacks('surfaceTalk', 'surfaceSlotBypassed', 'surfaceRackOut', 'surfaceTbPreset')
 		}, 30)
 	}
 

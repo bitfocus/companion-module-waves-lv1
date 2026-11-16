@@ -1,6 +1,6 @@
-// Actions and feedbacks that go through the Companion Surface driver (config mode
-// "Companion Surface"). Each one addresses an eMotion control directly; the driver sends
-// every change back, so feedbacks follow edits made on the desk too.
+// Actions and feedbacks of the Companion Surface mode. Everything goes through the driver
+// inside eMotion LV1: controls by address, and eMotion's own shortcut functions (flips, Talk
+// Back presets, scenes…) pressed like a surface key. MyRemote is not used in this mode.
 
 import {
 	CompanionActionDefinitions,
@@ -8,68 +8,167 @@ import {
 	CompanionInputFieldDropdown,
 	CompanionInputFieldTextInput,
 	combineRgb,
+	type DropdownChoice,
 } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
 import type { ControlAddress } from './surface-client.js'
 import { SurfaceControls } from './surface.js'
-import {
-	buildTrackPicker,
-	buildStateField,
-	buildNumberExprField,
-	resolveTrackAsync,
-	resolveStateAsync,
-	resolveNumberAsync,
-} from './tracks.js'
+import { FLIP_ALL_SELECTION, SURFACE_MIXERS, SURFACE_TRACK_TYPES, TB_PRESET } from './surface-model.js'
+import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
+import { buildStateField, buildNumberExprField, resolveStateAsync, resolveNumberAsync } from './tracks.js'
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
-type ExprContext = Parameters<typeof resolveTrackAsync>[1]
+type ExprContext = Parameters<typeof resolveNumberAsync>[2]
 
 const SLOT_CHOICES = Array.from({ length: 8 }, (_, i) => ({ id: String(i), label: `Slot ${i + 1}` }))
 
-function slotField(): AnyOpt {
-	return { type: 'dropdown', id: 'slot', label: 'Plugin slot', default: '0', choices: SLOT_CHOICES }
+/** "tt:track" ids for every track the desk reported, labelled "Ch 1 — Kick". */
+function stripChoices(
+	self: LV1Instance,
+	types: readonly number[] = SURFACE_TRACK_TYPES.map((t) => t.tt),
+): DropdownChoice[] {
+	const out: DropdownChoice[] = []
+	for (const t of SURFACE_TRACK_TYPES) {
+		if (!types.includes(t.tt)) continue
+		for (const tr of self.surfaceModel.list(t.tt)) {
+			const label = `${t.label} ${tr.track + 1}`
+			out.push({ id: `${t.tt}:${tr.track}`, label: tr.name && tr.name !== label ? `${label} — ${tr.name}` : label })
+		}
+	}
+	return out
 }
 
-/** The strip picked in the options, as the desk's track type / index. */
-async function stripOf(self: LV1Instance, options: Record<string, unknown>, context: ExprContext) {
-	const { group, ch } = await resolveTrackAsync(options, context)
-	const [tt, track] = self.auxMap.toWire(group, ch)
-	return { tt, track }
+function stripField(self: LV1Instance, id = 'strip', label = 'Strip', types?: readonly number[]): AnyOpt {
+	const choices = stripChoices(self, types)
+	return { type: 'dropdown', id, label, default: choices[0]?.id ?? '0:0', choices }
+}
+
+function auxField(self: LV1Instance): AnyOpt {
+	return stripField(self, 'aux', 'Aux (FX / Monitor)', [2, 25])
+}
+
+function parseStrip(v: unknown): { tt: number; track: number } {
+	const [tt, track] = (typeof v === 'string' || typeof v === 'number' ? String(v) : '0:0')
+		.split(':')
+		.map((n) => parseInt(n, 10))
+	return { tt: Number.isFinite(tt) ? tt : 0, track: Number.isFinite(track) ? track : 0 }
+}
+
+function mixerField(withAll: boolean): AnyOpt {
+	const choices: DropdownChoice[] = SURFACE_MIXERS.map((m) => ({ id: m.id, label: m.label }))
+	if (withAll) choices.push({ id: 'all', label: 'All mixers' })
+	return { type: 'dropdown', id: 'mixer', label: 'Mixer', default: 'm1', choices }
+}
+
+function phaseField(): AnyOpt {
+	return {
+		type: 'dropdown',
+		id: 'phase',
+		label: 'Key',
+		default: 'tap',
+		tooltip:
+			'Tap = press and release. Use Press on the button-down step and Release on the button-up step for hold keys (Alt, Ctrl).',
+		choices: [
+			{ id: 'tap', label: 'Tap (press + release)' },
+			{ id: 'down', label: 'Press only' },
+			{ id: 'up', label: 'Release only' },
+		],
+	}
 }
 
 /** on / off / toggle → the boolean to write, toggling from the last known value. */
 async function desiredState(
-	self: LV1Instance,
 	options: Record<string, unknown>,
 	context: ExprContext,
-	a: ControlAddress,
+	current: boolean,
 ): Promise<boolean> {
 	const mode = await resolveStateAsync(options, 'state', context, 'toggle')
 	if (mode === 'on') return true
 	if (mode === 'off') return false
-	return !self.surfaceBool(a)
+	return !current
+}
+
+function onOffToggle(on: string, off: string): AnyOpt[] {
+	return buildStateField(
+		'state',
+		[
+			{ id: 'on', label: on },
+			{ id: 'off', label: off },
+			{ id: 'toggle', label: 'Toggle' },
+		],
+		'toggle',
+	)
 }
 
 export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
-	const trackPicker: AnyOpt[] = buildTrackPicker(self, 'ch')
+	const fnChoices = SURFACE_FUNCTIONS.map((f) => ({ id: String(f.id), label: f.name }))
+	const fnWith = (kinds: string[]) =>
+		SURFACE_FUNCTIONS.filter((f) => kinds.includes(f.param))
+			.map((f) => `$(options:fn) == '${f.id}'`)
+			.join(' || ')
+
 	return {
+		surfaceFlip: {
+			name: 'Flip: Sends on fader',
+			description: 'Flip a mixer’s faders to an FX / Monitor aux, exactly like a Flip Sends user key in eMotion.',
+			options: [mixerField(true), auxField(self), ...onOffToggle('Flip on', 'Flip off')],
+			callback: async (a, context) => {
+				const { tt, track } = parseStrip(a.options.aux)
+				const mixer = String(a.options.mixer)
+				const views = mixer === 'all' ? SURFACE_MIXERS : SURFACE_MIXERS.filter((m) => m.id === mixer)
+				const current = views.every((m) => self.surfaceModel.isFlipped(m.surface, tt, track))
+				const want = await desiredState(a.options, context, current)
+				// eMotion's Flip Sends toggles: press it only when the state has to change.
+				if (want === current) return
+				const selection = mixer === 'all' ? FLIP_ALL_SELECTION : (views[0]?.selection ?? 0)
+				self.surfaceRunFunction(FN_FLIP_SENDS, selection, tt, track)
+			},
+		},
+
+		surfaceTbPreset: {
+			name: 'Talk Back: Recall preset',
+			description: 'Select a Talk Back preset exactly like the preset buttons in eMotion’s Talk Back panel.',
+			options: [buildNumberExprField('preset', 'Preset (1 = first)', 1, 'Variables OK.')],
+			callback: async (a, context) => {
+				const preset = Math.max(1, Math.round(await resolveNumberAsync(a.options, 'preset', context, 1)))
+				self.surfaceRunFunction(FN_TB_PRESET, preset, -1, -1)
+			},
+		},
+
 		surfaceTalk: {
 			name: 'Talk Back: TALK',
 			description: 'Presses TALK exactly like the button in eMotion (Talk Back mic to the selected destinations).',
-			options: [
-				...buildStateField(
-					'state',
-					[
-						{ id: 'on', label: 'Talk on' },
-						{ id: 'off', label: 'Talk off' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-					'toggle',
-				),
-			],
+			options: onOffToggle('Talk on', 'Talk off'),
 			callback: async (a, context) => {
 				const addr = SurfaceControls.talk()
-				self.surfaceSetBool(addr, await desiredState(self, a.options, context, addr))
+				self.surfaceSetBool(addr, await desiredState(a.options, context, self.surfaceBool(addr)))
+			},
+		},
+
+		surfaceFunction: {
+			name: 'eMotion function (shortcut)',
+			description:
+				'Runs any eMotion user-key function, as if a surface key assigned to it was pressed: scenes, sessions, presets, ' +
+				'navigation, mute groups, Lock, Clear Solo, recording…',
+			options: [
+				{ type: 'dropdown', id: 'fn', label: 'Function', default: fnChoices[0].id, choices: fnChoices },
+				{ ...stripField(self), isVisibleExpression: fnWith(['track', 'track+number']) },
+				{
+					...buildNumberExprField('number', 'Number (scene, preset, slot… — see the function)', 1, 'Variables OK.'),
+					isVisibleExpression: fnWith(['number', 'track+number']),
+				},
+				phaseField(),
+			],
+			callback: async (a, context) => {
+				const id = parseInt(String(a.options.fn), 10)
+				const f = SURFACE_FUNCTIONS.find((x) => x.id === id)
+				if (!f) return
+				const needsTrack = f.param === 'track' || f.param === 'track+number'
+				const needsNumber = f.param === 'number' || f.param === 'track+number'
+				const { tt, track } = needsTrack ? parseStrip(a.options.strip) : { tt: -1, track: -1 }
+				const number = needsNumber ? Math.round(await resolveNumberAsync(a.options, 'number', context, 1)) : -1
+				const phase = String(a.options.phase ?? 'tap') as 'tap' | 'down' | 'up'
+				self.surfaceRunFunction(f.id, number, tt, track, phase)
 			},
 		},
 
@@ -77,44 +176,25 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 			name: 'Plugin: Slot bypass',
 			description: 'Bypass one plugin slot in a strip’s rack.',
 			options: [
-				...trackPicker,
-				slotField(),
-				...buildStateField(
-					'state',
-					[
-						{ id: 'on', label: 'Bypass' },
-						{ id: 'off', label: 'Active' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-					'toggle',
-				),
+				stripField(self),
+				{ type: 'dropdown', id: 'slot', label: 'Plugin slot', default: '0', choices: SLOT_CHOICES },
+				...onOffToggle('Bypass', 'Active'),
 			],
 			callback: async (a, context) => {
-				const { tt, track } = await stripOf(self, a.options, context)
+				const { tt, track } = parseStrip(a.options.strip)
 				const addr = SurfaceControls.slotBypass(tt, track, Number(a.options.slot) || 0)
-				self.surfaceSetBool(addr, await desiredState(self, a.options, context, addr))
+				self.surfaceSetBool(addr, await desiredState(a.options, context, self.surfaceBool(addr)))
 			},
 		},
 
 		surfaceRack: {
 			name: 'Plugin: Rack In / Out',
 			description: 'Switch a strip’s whole plugin rack in or out.',
-			options: [
-				...trackPicker,
-				...buildStateField(
-					'state',
-					[
-						{ id: 'on', label: 'In' },
-						{ id: 'off', label: 'Out' },
-						{ id: 'toggle', label: 'Toggle' },
-					],
-					'toggle',
-				),
-			],
+			options: [stripField(self), ...onOffToggle('In', 'Out')],
 			callback: async (a, context) => {
-				const { tt, track } = await stripOf(self, a.options, context)
+				const { tt, track } = parseStrip(a.options.strip)
 				const addr = SurfaceControls.rackIn(tt, track)
-				self.surfaceSetBool(addr, await desiredState(self, a.options, context, addr))
+				self.surfaceSetBool(addr, await desiredState(a.options, context, self.surfaceBool(addr)))
 			},
 		},
 
@@ -149,8 +229,29 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 }
 
 export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinitions {
-	const trackPicker: AnyOpt[] = buildTrackPicker(self, 'ch')
 	return {
+		surfaceFlip: {
+			type: 'boolean',
+			name: 'Flip: Mixer is flipped to aux',
+			description: 'True while that mixer’s faders are flipped to that FX / Monitor aux (each mixer separately).',
+			defaultStyle: { bgcolor: combineRgb(0, 120, 200), color: combineRgb(255, 255, 255) },
+			options: [mixerField(false), auxField(self)],
+			callback: (fb) => {
+				const { tt, track } = parseStrip(fb.options.aux)
+				const view = SURFACE_MIXERS.find((m) => m.id === fb.options.mixer) ?? SURFACE_MIXERS[0]
+				return self.surfaceModel.isFlipped(view.surface, tt, track)
+			},
+		},
+		surfaceTbPreset: {
+			type: 'boolean',
+			name: 'Talk Back: Preset is selected',
+			defaultStyle: { bgcolor: combineRgb(200, 120, 0), color: combineRgb(255, 255, 255) },
+			options: [{ type: 'number', id: 'preset', label: 'Preset (1 = first)', default: 1, min: 1, max: 64 }],
+			callback: (fb) => {
+				self.surfaceValue(TB_PRESET) // asks the desk once when unknown
+				return self.surfaceModel.tbPreset === Number(fb.options.preset)
+			},
+		},
 		surfaceTalk: {
 			type: 'boolean',
 			name: 'Talk Back: TALK is on',
@@ -162,9 +263,12 @@ export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 			type: 'boolean',
 			name: 'Plugin: Slot bypassed',
 			defaultStyle: { bgcolor: combineRgb(180, 120, 0), color: combineRgb(255, 255, 255) },
-			options: [...trackPicker, slotField()],
-			callback: async (fb, context) => {
-				const { tt, track } = await stripOf(self, fb.options, context)
+			options: [
+				stripField(self),
+				{ type: 'dropdown', id: 'slot', label: 'Plugin slot', default: '0', choices: SLOT_CHOICES },
+			],
+			callback: (fb) => {
+				const { tt, track } = parseStrip(fb.options.strip)
 				return self.surfaceBool(SurfaceControls.slotBypass(tt, track, Number(fb.options.slot) || 0))
 			},
 		},
@@ -172,9 +276,9 @@ export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 			type: 'boolean',
 			name: 'Plugin: Rack is Out',
 			defaultStyle: { bgcolor: combineRgb(180, 120, 0), color: combineRgb(255, 255, 255) },
-			options: trackPicker,
-			callback: async (fb, context) => {
-				const { tt, track } = await stripOf(self, fb.options, context)
+			options: [stripField(self)],
+			callback: (fb) => {
+				const { tt, track } = parseStrip(fb.options.strip)
 				const v = self.surfaceValue(SurfaceControls.rackIn(tt, track))
 				return v != null && v < 0.5
 			},

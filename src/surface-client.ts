@@ -27,6 +27,14 @@ export interface ControlUpdate extends ControlAddress {
 	text: string
 }
 
+/** A message between eMotion's surfaces (InterMapper); payload starts at the command header. */
+export interface InterMapMessage {
+	msg: number
+	src: number
+	dst: number
+	payload: Buffer
+}
+
 export function controlKey(a: ControlAddress): string {
 	return `${a.tt}.${a.track}.${a.group}.${a.secType}.${a.secIdx}.${a.cid}`
 }
@@ -51,6 +59,7 @@ export interface SurfaceClientOptions {
 
 /**
  * Events: 'ready' (version), 'control' (ControlUpdate, from ctl and val lines),
+ * 'intermap' (InterMapMessage, after `sub im 1`),
  * 'driverError' (message), 'authFailed', 'close', 'error' (Error).
  */
 export class SurfaceClient extends EventEmitter {
@@ -162,6 +171,14 @@ export class SurfaceClient extends EventEmitter {
 				const value = parseFloat(parts[8])
 				if (!a || rc !== 0 || !Number.isFinite(value)) return
 				this.emit('control', { ...a, value, text: parts.slice(9).join(' ') } satisfies ControlUpdate)
+				return
+			}
+			case 'im': {
+				// im <msg> <src> <dst> <size> <value> <hex payload>: an eMotion InterMapper message
+				const [msg, src, dst] = parts.slice(1, 4).map((p) => parseInt(p, 10))
+				const payload = Buffer.from(parts[6] ?? '', 'hex')
+				if ([msg, src, dst].some((n) => !Number.isFinite(n))) return
+				this.emit('intermap', { msg, src, dst, payload } satisfies InterMapMessage)
 				return
 			}
 			case 'err':
