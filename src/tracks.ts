@@ -8,10 +8,10 @@
 //
 // Channel choices per group come from:
 //   group=0 (Input)   → /Notify/Layers inputLayers, or fallback to effectiveChannels()
-//   group=1 (Groups)  → /Channels count (8 or 16), default 8
+//   group=1 (Groups)  → /Channels count (8 or 16), default 16
 //   group=2 (Aux/FX)  → /Aux/Tracks names, or auxes count
-//   group=6 (Matrix)  → /Channels count, default 8
-//   group=12 (DCA)    → /Channels count (16 "Link" tracks on v17), default 8
+//   group=6 (Matrix)  → /Channels count, default 16
+//   group=12 (DCA)    → /Channels count (16 "Link" tracks on v17), default 16
 
 import type { DropdownChoice, CompanionInputFieldDropdown, CompanionInputFieldTextInput } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
@@ -94,7 +94,9 @@ export const GROUP_CHOICES: DropdownChoice[] = [
  *  historic fixed 8. */
 export function busCount(self: LV1Instance, group: 1 | 6 | 12): number {
 	const n = self.detected.groupCounts?.[group]
-	return n && n > 0 && n <= 64 ? n : 8
+	// Until /Channels says, the largest v17 count: Companion checks saved option values against
+	// the dropdown choices, so a button on Group 12 must stay valid before the desk answers.
+	return n && n > 0 && n <= 64 ? n : 16
 }
 
 /** Per-group channel dropdown, shown for its own group only. */
@@ -118,7 +120,8 @@ export function channelsFor(self: LV1Instance, group: number): DropdownChoice[] 
 			return out
 		}
 		case 2: {
-			const total = self.effectiveAuxes()
+			// Before the desk answers: every possible aux (16 FX + 32 Mon), see busCount.
+			const total = self.detected.auxes ?? 48
 			const out: DropdownChoice[] = []
 			for (let i = 0; i < total; i++) out.push({ id: i + 1, label: named(i, 'Aux') })
 			return out
