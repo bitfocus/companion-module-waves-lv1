@@ -102,10 +102,12 @@ export function displayNumber(text: string): number | null {
 	return Number.isFinite(n) ? n : null
 }
 
-/** eMotion's mixer views as InterMapper surfaces, and the user-key "mixer" selection for flips. */
+/** eMotion's mixer views as InterMapper surfaces (Mixer 1, Mixer 2 and the All page, each with its
+ *  own aux flip), the user-key "mixer" selection for flips, and the name of its flip variable. */
 export const SURFACE_MIXERS = [
-	{ id: 'm1', label: 'Mixer 1', surface: 0, selection: 0 },
-	{ id: 'm2', label: 'Mixer 2', surface: 1, selection: 1 },
+	{ id: 'm1', label: 'Mixer 1', surface: 0, selection: 0, variable: 'mixer1_flip' },
+	{ id: 'm2', label: 'Mixer 2', surface: 1, selection: 1, variable: 'mixer2_flip' },
+	{ id: 'all', label: 'All', surface: 27, selection: 10, variable: 'all_flip' },
 ] as const
 export const FLIP_ALL_SELECTION = 10
 

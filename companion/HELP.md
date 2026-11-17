@@ -246,7 +246,7 @@ With it the module does everything over the network, without MyRemote:
 - **Faders, mute and solo** of any strip, with fades in dB. Mute follows the
   desk: it blinks while a strip is muted by a mute group, Mute All or a Link
 - **Mute All** and the **mute groups**
-- **Flips** to an FX or Monitor send, per mixer (Mixer 1, Mixer 2 or both)
+- **Flips** (sends on fader) to an FX or Monitor send for Mixer 1, Mixer 2 or the All page; eMotion stays on the page it shows
 - **Talk Back**: TALK and the Talk Back presets
 - **eMotion plugins**: any parameter, picked by plugin and parameter name, with
   fades; slot bypass (slots 1-8) and rack In / Out

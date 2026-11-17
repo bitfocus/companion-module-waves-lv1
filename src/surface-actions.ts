@@ -51,11 +51,11 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 			name: 'Flip: Sends on fader',
 			description:
 				'Flip a mixer’s faders to an FX / Monitor aux, like a surface linked to that mixer does: eMotion stays on the page it shows.',
-			options: [mixerField(true), auxField(self), ...onOffToggle('Flip on', 'Flip off')],
+			options: [mixerField(), auxField(self), ...onOffToggle('Flip on', 'Flip off')],
 			callback: async (a, context) => {
 				const { tt, track } = parseStrip(a.options.aux)
 				const mixer = optionText(a.options.mixer)
-				const views = mixer === 'all' ? SURFACE_MIXERS : SURFACE_MIXERS.filter((m) => m.id === mixer)
+				const views = SURFACE_MIXERS.filter((m) => m.id === mixer)
 				const current = views.every((m) => self.surfaceModel.isFlipped(m.surface, tt, track))
 				const want = await desiredState(a.options, context, current)
 				if (want === current) return
@@ -151,7 +151,7 @@ export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 			name: 'Flip: Mixer is flipped to aux',
 			description: 'True while that mixer’s faders are flipped to that FX / Monitor aux (each mixer separately).',
 			defaultStyle: { bgcolor: combineRgb(0, 120, 200), color: combineRgb(255, 255, 255) },
-			options: [mixerField(false), auxField(self)],
+			options: [mixerField(), auxField(self)],
 			callback: (fb) => {
 				const { tt, track } = parseStrip(fb.options.aux)
 				const view = SURFACE_MIXERS.find((m) => m.id === fb.options.mixer) ?? SURFACE_MIXERS[0]

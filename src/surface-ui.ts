@@ -57,9 +57,12 @@ export function parseStrip(v: unknown): { tt: number; track: number } {
 	return { tt: Number.isFinite(tt) ? tt : 0, track: Number.isFinite(track) ? track : 0 }
 }
 
-export function mixerField(withAll: boolean): CompanionInputFieldDropdown {
-	const choices: DropdownChoice[] = SURFACE_MIXERS.map((m) => ({ id: m.id, label: m.label }))
-	if (withAll) choices.push({ id: 'all', label: 'All mixers' })
+/** Mixer 1, Mixer 2 or the All page (each has its own aux flip). */
+export function mixerField(): CompanionInputFieldDropdown {
+	const choices: DropdownChoice[] = SURFACE_MIXERS.map((m) => ({
+		id: m.id,
+		label: m.label === 'All' ? 'All page' : m.label,
+	}))
 	return { type: 'dropdown', id: 'mixer', label: 'Mixer', default: 'm1', choices }
 }
 

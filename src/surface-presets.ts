@@ -387,7 +387,7 @@ export function surfaceVariableDefinitions(self: LV1Instance): Array<{ variableI
 	}
 	for (const m of SURFACE_MIXERS)
 		defs.push({
-			variableId: `${m.id === 'm1' ? 'mixer1' : 'mixer2'}_flip`,
+			variableId: m.variable,
 			name: `${m.label} flipped to (aux name, blank = not flipped)`,
 		})
 	defs.push(
@@ -428,7 +428,7 @@ export function surfaceVariableValues(self: LV1Instance): Record<string, string>
 	}
 	for (const mx of SURFACE_MIXERS) {
 		const f = m.flips.get(mx.surface)
-		v[`${mx.id === 'm1' ? 'mixer1' : 'mixer2'}_flip`] = f?.on ? m.name(f.tt, f.track) : ''
+		v[mx.variable] = f?.on ? m.name(f.tt, f.track) : ''
 	}
 	const g = m.gui
 	const muteAll = self.surfaceControls.get(controlKey(MUTE_ALL))
