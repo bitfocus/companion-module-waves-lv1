@@ -558,7 +558,12 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		})
 		s.on('signal', (sig: EmotionSignal) => {
 			if (sig.name === 'muteGroupStateChanged') this.surfaceScheduleMuteReread()
-			if (sig.name === 'currentSessionNameChanged') this.surfaceScheduleReread()
+			if (sig.name === 'currentSessionNameChanged') {
+				// Loading a session clears the shortcuts registered on our surface: register again.
+				this.surfaceKeys.clear()
+				this.nextSurfaceSlot = 1
+				this.surfaceScheduleReread()
+			}
 			if (!this.surfaceModel.applySignal(sig.name, sig.args)) return
 			this.scheduleSurfaceFeedbacks()
 			this.scheduleSurfaceVariables()
