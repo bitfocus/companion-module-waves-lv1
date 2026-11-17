@@ -94,7 +94,7 @@ export function UpdatePresets(self: LV1Instance): void {
 		}
 	}
 
-	// User Keys 1-16 (momentary). Label shows the LV1's own short name from
+	// User Keys 1-16 (held like a surface key). Label shows the LV1's own short name from
 	// /Notify/UserKeyInfo (e.g. "Mon 1") with a fallback to "UK N" if the key
 	// is unassigned or names haven't arrived yet.
 	for (let k = 1; k <= 16; k++) {
@@ -108,7 +108,14 @@ export function UpdatePresets(self: LV1Instance): void {
 				color: combineRgb(255, 255, 255),
 				bgcolor: combineRgb(30, 60, 90),
 			},
-			steps: [{ down: [{ actionId: 'userKey', options: { key: k, mode: 'momentary' } }], up: [] }],
+			// Like the key on a surface: pressed while the button is held (TALK talks while held,
+			// flips act on the release).
+			steps: [
+				{
+					down: [{ actionId: 'userKey', options: { key: String(k), mode: 'on' } }],
+					up: [{ actionId: 'userKey', options: { key: String(k), mode: 'off' } }],
+				},
+			],
 			feedbacks: [],
 		}
 	}
