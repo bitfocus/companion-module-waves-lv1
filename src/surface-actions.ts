@@ -49,7 +49,8 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 		...featureActions(self),
 		surfaceFlip: {
 			name: 'Flip: Sends on fader',
-			description: 'Flip a mixer’s faders to an FX / Monitor aux, exactly like a Flip Sends user key in eMotion.',
+			description:
+				'Flip a mixer’s faders to an FX / Monitor aux, like a surface linked to that mixer does: eMotion stays on the page it shows.',
 			options: [mixerField(true), auxField(self), ...onOffToggle('Flip on', 'Flip off')],
 			callback: async (a, context) => {
 				const { tt, track } = parseStrip(a.options.aux)
@@ -57,8 +58,18 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 				const views = mixer === 'all' ? SURFACE_MIXERS : SURFACE_MIXERS.filter((m) => m.id === mixer)
 				const current = views.every((m) => self.surfaceModel.isFlipped(m.surface, tt, track))
 				const want = await desiredState(a.options, context, current)
-				// eMotion's Flip Sends toggles: press it only when the state has to change.
 				if (want === current) return
+				// Driver 0.1.19+: tell the mixer views directly, eMotion keeps its page.
+				if (
+					self.surfaceFlipViews(
+						views.map((m) => m.surface),
+						tt,
+						track,
+						want,
+					)
+				)
+					return
+				// Older driver: eMotion's Flip Sends user key (it toggles, and switches to the mixer page).
 				const selection = mixer === 'all' ? FLIP_ALL_SELECTION : (views[0]?.selection ?? 0)
 				self.surfaceRunFunction(FN_FLIP_SENDS, selection, tt, track)
 			},

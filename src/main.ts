@@ -977,6 +977,25 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	 * Runs an eMotion shortcut function (WCUserKeyHandler action code) the way a surface key does:
 	 * the first time, register it on our surface (its own slot), then press and release it.
 	 */
+	/**
+	 * Flip mixer views (0 = Mixer 1, 1 = Mixer 2) to an aux or back, without eMotion switching its
+	 * page: needs driver 0.1.19 (returns false with an older one). The aux is eMotion's combined
+	 * index: FX first, then Monitors.
+	 */
+	surfaceFlipViews(views: number[], tt: number, track: number, on: boolean): boolean {
+		const s = this.surface
+		if (!s?.isReady() || compareVersions(s.version ?? '0', '0.1.19') < 0) return false
+		const fxCount = this.surfaceModel.list(2).length
+		const aux = tt === 2 ? track : tt === 25 ? fxCount + track : -1
+		if (aux < 0) return false
+		for (const view of views) {
+			// Turning off only where that aux is the one flipped (msg 4 with on=0 un-flips the view).
+			if (!on && !this.surfaceModel.isFlipped(view, tt, track)) continue
+			s.write(`flip ${view} ${aux} ${on ? 1 : 0}`)
+		}
+		return true
+	}
+
 	surfaceRunFunction(
 		fn: number,
 		selection: number,
