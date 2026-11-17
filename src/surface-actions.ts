@@ -6,8 +6,8 @@ import { CompanionActionDefinitions, CompanionFeedbackDefinitions, combineRgb } 
 import type { LV1Instance } from './main.js'
 import { optionText } from './definitions.js'
 import { SurfaceControls } from './surface.js'
-import { FLIP_ALL_SELECTION, SURFACE_MIXERS, TB_PRESET } from './surface-model.js'
-import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
+import { SURFACE_MIXERS, TB_PRESET } from './surface-model.js'
+import { FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
 import {
 	SLOT_CHOICES,
 	auxField,
@@ -59,19 +59,12 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 				const current = views.every((m) => self.surfaceModel.isFlipped(m.surface, tt, track))
 				const want = await desiredState(a.options, context, current)
 				if (want === current) return
-				// Driver 0.1.19+: tell the mixer views directly, eMotion keeps its page.
-				if (
-					self.surfaceFlipViews(
-						views.map((m) => m.surface),
-						tt,
-						track,
-						want,
-					)
+				self.surfaceFlipViews(
+					views.map((m) => m.surface),
+					tt,
+					track,
+					want,
 				)
-					return
-				// Older driver: eMotion's Flip Sends user key (it toggles, and switches to the mixer page).
-				const selection = mixer === 'all' ? FLIP_ALL_SELECTION : (views[0]?.selection ?? 0)
-				self.surfaceRunFunction(FN_FLIP_SENDS, selection, tt, track)
 			},
 		},
 
