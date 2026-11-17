@@ -149,6 +149,8 @@ export class SurfaceModel {
 	slots = new Map<string, { name: string; code: string }>()
 	/** Parameter catalogue per plugin code (MQ4M, CDYM…), read from the desk. */
 	plugins = new Map<string, PluginInfo>()
+	/** Output meters per strip, key `${tt}.${track}`: legs (0 = left / mono, 1 = right) and clip. */
+	meters = new Map<string, { legs: number[]; clip: boolean }>()
 	/** Real-world values (dB…), key = controlKey of the written control. */
 	real = new Map<string, number>()
 	/** eMotion GUI state from its signals; null = not reported yet. */
@@ -175,6 +177,7 @@ export class SurfaceModel {
 		this.tbPreset = null
 		this.slots.clear()
 		this.real.clear()
+		this.meters.clear()
 		this.gui.sceneNames.clear()
 		this.gui.userKeyLights.clear()
 		this.gui.talk = null

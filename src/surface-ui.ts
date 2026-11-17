@@ -15,7 +15,10 @@ export type ExprContext = Parameters<typeof resolveNumberAsync>[2]
 
 export const SLOT_CHOICES = Array.from({ length: 8 }, (_, i) => ({ id: String(i), label: `Slot ${i + 1}` }))
 
-/** "tt:track" ids for every track the desk reported, labelled "Ch 1 — Kick". */
+/**
+ * "tt:track" ids for every track the desk reported, labelled "Ch 1 — Kick". Before the desk has
+ * been read, every possible track of the type is listed, so saved buttons keep valid values.
+ */
 export function stripChoices(
 	self: LV1Instance,
 	types: readonly number[] = SURFACE_TRACK_TYPES.map((t) => t.tt),
@@ -23,7 +26,9 @@ export function stripChoices(
 	const out: DropdownChoice[] = []
 	for (const t of SURFACE_TRACK_TYPES) {
 		if (!types.includes(t.tt)) continue
-		for (const tr of self.surfaceModel.list(t.tt)) {
+		const known = self.surfaceModel.list(t.tt)
+		const tracks = known.length ? known : Array.from({ length: t.max }, (_, track) => ({ track, name: '' }))
+		for (const tr of tracks) {
 			const label = t.max === 1 ? t.label : `${t.label} ${tr.track + 1}`
 			out.push({ id: `${t.tt}:${tr.track}`, label: tr.name && tr.name !== label ? `${label} — ${tr.name}` : label })
 		}

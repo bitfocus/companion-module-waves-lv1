@@ -4,6 +4,7 @@
 
 import { CompanionActionDefinitions, CompanionFeedbackDefinitions, combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { optionText } from './definitions.js'
 import {
 	MUTE_ALL,
 	MUTE_GROUPS,
@@ -30,6 +31,15 @@ import {
 const RED = combineRgb(200, 0, 0)
 const AMBER = combineRgb(200, 120, 0)
 const WHITE = combineRgb(255, 255, 255)
+
+/** Meter scale for a gauge: 0 = -60 dB, 100 = 0 dBFS. */
+const METER_FLOOR = -60
+
+/** A meter in dB as 0-100 for a Gauge element. */
+function meterPercent(db: number | undefined): number {
+	if (db == null || !Number.isFinite(db) || db <= METER_FLOOR) return 0
+	return Math.min(100, Math.round(((db - METER_FLOOR) / -METER_FLOOR) * 1000) / 10)
+}
 
 const groupChoices = Array.from({ length: MUTE_GROUPS }, (_, i) => ({ id: String(i), label: `Mute group ${i + 1}` }))
 
@@ -234,7 +244,7 @@ export function featureActions(self: LV1Instance): CompanionActionDefinitions {
 				const fade = await resolveFade(a.options, context)
 				await Promise.all(
 					t.targets.map(async (p) =>
-						self.surfaceChangePluginParam(t.tt, t.track, t.slot, p, String(a.options.mode), value, fade),
+						self.surfaceChangePluginParam(t.tt, t.track, t.slot, p, optionText(a.options.mode), value, fade),
 					),
 				)
 			},
@@ -340,6 +350,7 @@ export function featureFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 		},
 		surfacePluginValue: {
 			type: 'advanced',
+			affectedProperties: ['text'],
 			name: 'Plugin: Show parameter value on the button',
 			description: 'Puts the parameter’s value, as eMotion displays it, on the button text.',
 			options: [stripField(self, 'strip', 'Strip', RACK_TYPES), ...pluginFields(self)],
@@ -348,6 +359,36 @@ export function featureFeedbacks(self: LV1Instance): CompanionFeedbackDefinition
 				if (!t.param || t.slot < 0) return {}
 				const shown = self.surfacePluginText(t.tt, t.track, t.slot, t.index)
 				return shown == null ? {} : { text: `${t.wanted}\n${shown}` }
+			},
+		},
+		surfaceMeter: {
+			type: 'value',
+			name: 'Strip: VU meter level (0-100, for a Gauge)',
+			description:
+				'The strip’s output level: 0 = −60 dB, 100 = 0 dBFS. Use it as a local variable and show it with a Gauge element. Only the strips shown are metered.',
+			options: [
+				stripField(self, 'strip', 'Strip', STRIP_TYPES),
+				{
+					type: 'dropdown',
+					id: 'leg',
+					label: 'Leg',
+					default: 'max',
+					choices: [
+						{ id: 'max', label: 'Loudest leg (L or R)' },
+						{ id: 'l', label: 'Left / mono' },
+						{ id: 'r', label: 'Right' },
+					],
+				},
+			],
+			unsubscribe: (fb) => self.surfaceMeterUnbind(fb.id),
+			callback: (fb) => {
+				const { tt, track } = parseStrip(fb.options.strip)
+				self.surfaceMeterBind(fb.id, tt, track)
+				const legs = self.surfaceModel.meters.get(`${tt}.${track}`)?.legs ?? []
+				const leg = fb.options.leg
+				if (leg === 'l') return meterPercent(legs[0])
+				if (leg === 'r') return meterPercent(legs[1] ?? legs[0])
+				return Math.max(meterPercent(legs[0]), meterPercent(legs[1]))
 			},
 		},
 		surfaceLock: {

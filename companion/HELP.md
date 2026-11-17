@@ -9,6 +9,7 @@ relay or plugin needed on the LV1 PC.
 
 ### Before you start
 
+- **Companion 5.0 or later.** (Companion 4.x keeps using module version 1.2.)
 - **eMotion LV1 must be running** on the mixer machine.
 - **Companion and the LV1 should be on the same subnet.** The LV1 announces
   itself by multicast, and multicast does not cross routers. (If they are not on
@@ -239,12 +240,19 @@ issue and attach the Companion log with debug messages on.
 ## Companion Surface (optional driver)
 
 MyRemote only exposes part of the desk. **Companion Surface** is a control
-driver that runs inside eMotion LV1, like the LV1 Control or Mackie drivers,
-and lets this module reach controls MyRemote cannot:
+driver that runs inside eMotion LV1, like the LV1 Control or Mackie drivers.
+With it the module does everything over the network, without MyRemote:
 
-- **Talk Back TALK**, pressed exactly like the button in eMotion
-- **Plugin slot bypass** (slots 1-8) and **plugin rack In / Out** for any strip
-- **Set any control (advanced)**, by its raw eMotion address
+- **Faders, mute and solo** of any strip, with fades in dB. Mute follows the
+  desk: it blinks while a strip is muted by a mute group, Mute All or a Link
+- **Mute All** and the **mute groups**
+- **Flips** to an FX or Monitor send, per mixer (Mixer 1, Mixer 2 or both)
+- **Talk Back**: TALK and the Talk Back presets
+- **eMotion plugins**: any parameter, picked by plugin and parameter name, with
+  fades; slot bypass (slots 1-8) and rack In / Out
+- **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…)
+- **VU meters**: the _Strip: VU meter level_ feedback gives 0-100 for a Gauge
+  element (the flip presets come with one)
 
 Each one has a feedback that follows changes made on the desk.
 

@@ -10,11 +10,13 @@
 
 import {
 	InstanceBase,
-	runEntrypoint,
 	InstanceStatus,
-	SomeCompanionConfigField,
+	type CompanionFeedbackSchema,
 	type CompanionHTTPRequest,
 	type CompanionHTTPResponse,
+	type CompanionOptionValues,
+	type CompanionVariableValues,
+	type SomeCompanionConfigField,
 } from '@companion-module/base'
 import { GetConfigFields, type ModuleConfig } from './config.js'
 import { UpdateActions } from './actions.js'
@@ -48,7 +50,10 @@ import {
 } from './surface-model.js'
 import type { FadeCurve } from './surface-ui.js'
 import { surfaceVariableValues } from './surface-presets.js'
-import type { ControlProps, EmotionSignal, InterMapMessage, RealUpdate } from './surface-client.js'
+import type { ControlProps, EmotionSignal, InterMapMessage, MeterUpdate, RealUpdate } from './surface-client.js'
+
+/** Output meters of a strip: meter 16 (left / mono) and 17 (right). */
+const METER_OUT_MASK = (1 << 16) | (1 << 17)
 
 interface ChannelState {
 	muted: boolean
@@ -90,7 +95,16 @@ interface SendState {
 	gain: number
 }
 
-export class LV1Instance extends InstanceBase<ModuleConfig> {
+/** What the module gives Companion: the config, and actions / feedbacks / variables by id. */
+export type ModuleSchema = {
+	config: ModuleConfig
+	secrets: undefined
+	actions: Record<string, { options: CompanionOptionValues }>
+	feedbacks: Record<string, CompanionFeedbackSchema<CompanionOptionValues>>
+	variables: CompanionVariableValues
+}
+
+export class LV1Instance extends InstanceBase<ModuleSchema> {
 	public config!: ModuleConfig
 	public osc: OscTcpClient | null = null
 
@@ -177,6 +191,9 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	private surfaceDefsTimer: NodeJS.Timeout | null = null
 	/** Running fades, key = the control being faded. */
 	private surfaceFades = new Map<string, NodeJS.Timeout>()
+	/** Strips whose meters a feedback shows, key `${tt}.${track}` → number of feedbacks. */
+	private surfaceMeterRefs = new Map<string, number>()
+	private surfaceMeterTimer: NodeJS.Timeout | null = null
 	/** The desk's strips, racks and groups were read on this connection. */
 	private surfaceProbed = false
 	/** Plugin codes whose parameter catalogue was requested on this connection. */
@@ -312,7 +329,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.updateFeedbacks()
 			this.updatePresets()
 			this.updateVariables()
-			this.checkFeedbacks()
+			this.checkAllFeedbacks()
 			cancelDiscovery()
 			this.stopConnectScan()
 			await this.connectIfReady()
@@ -464,6 +481,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.nextSurfaceSlot = 1
 			// Flip state comes from eMotion's InterMapper messages; names and counts from the tracks.
 			s.write('sub im 1')
+			s.write('sub meters 1')
+			for (const key of this.surfaceMeterRefs.keys()) {
+				const [tt, track] = key.split('.').map(Number)
+				s.registerMeters(tt, track, METER_OUT_MASK)
+			}
 			this.surfacePluginsAsked.clear()
 			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
 			// Strips, racks and groups are read once the names say which tracks exist.
@@ -475,7 +497,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.log('info', `Companion Surface ${version ?? '?'} connected on ${host}:${port}`)
 			this.reportStatus()
 			// Feedback callbacks request the values they do not know yet.
-			this.checkFeedbacks()
+			this.checkAllFeedbacks()
 		})
 		s.on('control', (c: ControlUpdate) => {
 			this.surfaceControls.set(controlKey(c), c)
@@ -504,6 +526,20 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		s.on('props', (p: ControlProps) => {
 			const slot = this.surfaceModel.slots.get(`${p.tt}.${p.track}.${p.secType}`)
 			if (slot && this.surfaceModel.applyProps(slot.code, slot.name, p)) this.scheduleSurfaceDefinitions()
+		})
+		s.on('meter', (m: MeterUpdate) => {
+			if (m.meter < 16 || m.meter > 31) return
+			const key = `${m.tt}.${m.track}`
+			const cur = this.surfaceModel.meters.get(key) ?? { legs: [], clip: false }
+			cur.legs[m.meter - 16] = m.value
+			cur.clip = m.clip
+			this.surfaceModel.meters.set(key, cur)
+			// Meters redraw at most ~15 times a second.
+			if (!this.surfaceMeterTimer)
+				this.surfaceMeterTimer = setTimeout(() => {
+					this.surfaceMeterTimer = null
+					this.checkFeedbacks('surfaceMeter')
+				}, 66)
 		})
 		s.on('signal', (sig: EmotionSignal) => {
 			if (sig.name === 'muteGroupStateChanged') this.surfaceScheduleMuteReread()
@@ -550,7 +586,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.updateFeedbacks()
 			this.updatePresets()
 			this.updateVariables()
-			this.checkFeedbacks()
+			this.checkAllFeedbacks()
 		}, 400)
 	}
 
@@ -682,6 +718,51 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			}
 			this.scheduleSurfaceFeedbacks()
 		}
+	}
+
+	/** Strip each meter feedback shows, key = feedback id. */
+	private surfaceMeterFeedbacks = new Map<string, string>()
+
+	/** A meter feedback runs: (re)bind it to its strip, registering the strip's meters when new. */
+	surfaceMeterBind(feedbackId: string, tt: number, track: number): void {
+		const key = `${tt}.${track}`
+		const had = this.surfaceMeterFeedbacks.get(feedbackId)
+		if (had === key) return
+		if (had) {
+			const [ptt, ptrack] = had.split('.').map(Number)
+			this.surfaceMeterRelease(ptt, ptrack)
+		}
+		this.surfaceMeterFeedbacks.set(feedbackId, key)
+		this.surfaceMeterWant(tt, track)
+	}
+
+	/** A meter feedback was removed from its button. */
+	surfaceMeterUnbind(feedbackId: string): void {
+		const had = this.surfaceMeterFeedbacks.get(feedbackId)
+		if (!had) return
+		this.surfaceMeterFeedbacks.delete(feedbackId)
+		const [tt, track] = had.split('.').map(Number)
+		this.surfaceMeterRelease(tt, track)
+	}
+
+	/** A feedback shows this strip's meter: register it with eMotion (once per strip). */
+	surfaceMeterWant(tt: number, track: number): void {
+		const key = `${tt}.${track}`
+		const n = (this.surfaceMeterRefs.get(key) ?? 0) + 1
+		this.surfaceMeterRefs.set(key, n)
+		if (n === 1) this.surface?.registerMeters(tt, track, METER_OUT_MASK)
+	}
+
+	surfaceMeterRelease(tt: number, track: number): void {
+		const key = `${tt}.${track}`
+		const n = (this.surfaceMeterRefs.get(key) ?? 0) - 1
+		if (n > 0) {
+			this.surfaceMeterRefs.set(key, n)
+			return
+		}
+		this.surfaceMeterRefs.delete(key)
+		this.surface?.registerMeters(tt, track, 0)
+		this.surfaceModel.meters.delete(key)
 	}
 
 	/** Fader in dB, from what the desk reported. */
@@ -874,6 +955,14 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.surfaceFades.clear()
 		if (this.surfaceBlinkTimer) clearInterval(this.surfaceBlinkTimer)
 		this.surfaceBlinkTimer = null
+		if (this.surfaceMeterTimer) clearTimeout(this.surfaceMeterTimer)
+		this.surfaceMeterTimer = null
+		// eMotion keeps counting our meter registrations: release them when the module stops.
+		if (this.surface?.isReady())
+			for (const key of this.surfaceMeterRefs.keys()) {
+				const [tt, track] = key.split('.').map(Number)
+				this.surface.registerMeters(tt, track, 0)
+			}
 		if (this.surfaceMuteRereadTimer) clearTimeout(this.surfaceMuteRereadTimer)
 		this.surfaceMuteRereadTimer = null
 		if (this.surfaceVariablesTimer) clearTimeout(this.surfaceVariablesTimer)
@@ -1255,11 +1344,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const s = this.ensureChannel(g, ch)
 				if (addr === '/Notify/PhaseState') {
 					s.polarity = state !== 0
-					this.checkFeedbacks(...channelFeedbacksForDelta({ polarity: s.polarity }))
+					this.checkFeedbackList(channelFeedbacksForDelta({ polarity: s.polarity }))
 					pushTrackVariable(this, g, ch, 'polarity')
 				} else {
 					s.phantom = state !== 0
-					this.checkFeedbacks(...channelFeedbacksForDelta({ phantom: s.phantom }))
+					this.checkFeedbackList(channelFeedbacksForDelta({ phantom: s.phantom }))
 					pushTrackVariable(this, g, ch, 'phantom')
 				}
 				break
@@ -1880,11 +1969,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		])
 	}
 
+	/** checkFeedbacks for a list of feedback ids (nothing when it is empty). */
+	checkFeedbackList(ids: string[]): void {
+		const [first, ...rest] = ids
+		if (first) this.checkFeedbacks(first, ...rest)
+	}
+
 	applyChannelDelta(group: number, ch: number, delta: Partial<ChannelState>): void {
 		const s = this.ensureChannel(group, ch)
 		Object.assign(s, delta)
 		const channelFeedbacks = channelFeedbacksForDelta(delta)
-		if (channelFeedbacks.length) this.checkFeedbacks(...channelFeedbacks)
+		this.checkFeedbackList(channelFeedbacks)
 		if (delta.muted != null) {
 			this.checkFeedbacks('channelMute')
 			pushTrackVariable(this, group, ch, 'mute')
@@ -2022,4 +2117,5 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	}
 }
 
-runEntrypoint(LV1Instance, UpgradeScripts)
+export { UpgradeScripts }
+export default LV1Instance

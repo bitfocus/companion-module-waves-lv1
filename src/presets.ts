@@ -1,24 +1,25 @@
 // A small set of ready-made buttons that exercise the most common actions.
 // Users will roll their own for production layouts; these are starter templates.
 
-import { CompanionPresetDefinitions, combineRgb } from '@companion-module/base'
+import { combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { publishPresets, type Preset } from './preset-structure.js'
 import { surfacePresets } from './surface-presets.js'
 
 export function UpdatePresets(self: LV1Instance): void {
 	// These presets use MyRemote actions; Companion Surface mode has its own.
 	if (self.config.mode === 'surface') {
-		self.setPresetDefinitions(surfacePresets(self))
+		publishPresets(self, surfacePresets(self))
 		return
 	}
-	const presets: CompanionPresetDefinitions = {}
+	const presets: Record<string, Preset> = {}
 
 	const chCount = self.effectiveChannels()
 	// One mute button per input channel. Uses the new per-group field (ch_in) — see tracks.ts.
 	for (let ch = 1; ch <= Math.min(chCount, 16); ch++) {
 		presets[`mute_ch_${ch}`] = {
 			category: 'Mute (Ch 1-16)',
-			type: 'button',
+			type: 'simple',
 			name: `Mute Ch ${ch}`,
 			style: {
 				text: `MUTE\n$(lv1:in${ch}_name)`,
@@ -46,7 +47,7 @@ export function UpdatePresets(self: LV1Instance): void {
 	for (let ch = 1; ch <= Math.min(chCount, 16); ch++) {
 		presets[`solo_ch_${ch}`] = {
 			category: 'Solo (Ch 1-16)',
-			type: 'button',
+			type: 'simple',
 			name: `Solo Ch ${ch}`,
 			style: {
 				text: `SOLO\n$(lv1:in${ch}_name)`,
@@ -74,7 +75,7 @@ export function UpdatePresets(self: LV1Instance): void {
 	for (let g = 1; g <= 8; g++) {
 		presets[`mutegroup_${g}`] = {
 			category: 'Mute Groups',
-			type: 'button',
+			type: 'simple',
 			name: `Mute Group ${g}`,
 			style: {
 				text: `MG ${g}`,
@@ -99,7 +100,7 @@ export function UpdatePresets(self: LV1Instance): void {
 	for (let k = 1; k <= 16; k++) {
 		presets[`userkey_${k}`] = {
 			category: 'User Keys',
-			type: 'button',
+			type: 'simple',
 			name: `User Key ${k}`,
 			style: {
 				text: `UK ${k}\n$(lv1:userkey_${k}_name)`,
@@ -114,7 +115,7 @@ export function UpdatePresets(self: LV1Instance): void {
 
 	presets['tap_tempo'] = {
 		category: 'Tempo',
-		type: 'button',
+		type: 'simple',
 		name: 'Tap Tempo',
 		style: { text: 'TAP', size: '24', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 100, 0) },
 		steps: [{ down: [{ actionId: 'tapTempo', options: {} }], up: [] }],
@@ -124,7 +125,7 @@ export function UpdatePresets(self: LV1Instance): void {
 	// CLR SOLO — clears solo everywhere. Lights up (yellow) whenever any track is soloed.
 	presets['clear_all_solo'] = {
 		category: 'Solo',
-		type: 'button',
+		type: 'simple',
 		name: 'Clear All Solo',
 		style: {
 			text: 'CLR\nSOLO',
@@ -152,7 +153,7 @@ export function UpdatePresets(self: LV1Instance): void {
 		const auxIdx = self.detected.auxNames?.findIndex((n) => n === uk.name) ?? -1
 		presets[`flip_sends_${idx + 1}`] = {
 			category: 'Flip Sends',
-			type: 'button',
+			type: 'simple',
 			name: `Flip Sends — ${uk.name} (UK ${idx + 1})`,
 			style: {
 				text: `FLIP\n${uk.name}`,
@@ -187,7 +188,7 @@ export function UpdatePresets(self: LV1Instance): void {
 		const name = self.detected.auxNames?.[aux - 1] ?? `Aux ${aux}`
 		presets[`talk_back_aux_${aux}`] = {
 			category: 'Talk Back',
-			type: 'button',
+			type: 'simple',
 			name: `TALK → ${name}`,
 			style: {
 				text: `TALK\n${name}`,
@@ -216,7 +217,7 @@ export function UpdatePresets(self: LV1Instance): void {
 	for (let bank = 0; bank < 2; bank++) {
 		presets[`spill_mixer_${bank + 1}`] = {
 			category: 'Spill',
-			type: 'button',
+			type: 'simple',
 			name: `Spill Mixer ${bank + 1} — slot 0`,
 			style: {
 				text: `SPILL\nMX${bank + 1}`,
@@ -240,5 +241,5 @@ export function UpdatePresets(self: LV1Instance): void {
 		}
 	}
 
-	self.setPresetDefinitions(presets)
+	publishPresets(self, presets)
 }

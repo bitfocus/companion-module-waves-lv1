@@ -44,6 +44,15 @@ export interface ControlProps extends ControlAddress {
 	maxText: string
 }
 
+/** A meter value: meter 16-31 = output legs (16 = left / mono, 17 = right). */
+export interface MeterUpdate {
+	tt: number
+	track: number
+	meter: number
+	value: number
+	clip: boolean
+}
+
 /** One of eMotion's state signals (mute groups, lock, scenes, tempo…). */
 export interface EmotionSignal {
 	name: string
@@ -136,6 +145,11 @@ export class SurfaceClient extends EventEmitter {
 	/** Read in real-world units; answered with a 'real' event. */
 	getReal(a: ControlAddress): void {
 		this.request(`getu 3 ${addr(a)}`)
+	}
+
+	/** Ask eMotion's meter engine for a strip's meters (bit k = meter k); mask 0 stops them. */
+	registerMeters(tt: number, track: number, mask: number): void {
+		this.write(`meters ${tt} ${track} ${mask.toString(16)}`)
 	}
 
 	/** Control properties (name, range); answered with a 'props' event. */
@@ -279,6 +293,14 @@ export class SurfaceClient extends EventEmitter {
 				} catch {
 					// ignore a malformed line
 				}
+				return
+			}
+			case 'mtr': {
+				// mtr <tt> <track> <meter> <value> <clip>
+				const [tt, track, meter] = parts.slice(1, 4).map((p) => parseInt(p, 10))
+				const value = parseFloat(parts[4])
+				if ([tt, track, meter].some((n) => !Number.isFinite(n)) || !Number.isFinite(value)) return
+				this.emit('meter', { tt, track, meter, value, clip: parts[5] === '1' } satisfies MeterUpdate)
 				return
 			}
 			case 'im': {

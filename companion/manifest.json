@@ -19,7 +19,7 @@
 	"runtime": {
 		"type": "node22",
 		"api": "nodejs-ipc",
-		"apiVersion": "1.12.0",
+		"apiVersion": "2.1.3",
 		"entrypoint": "../dist/main.js"
 	},
 	"legacyIds": [],

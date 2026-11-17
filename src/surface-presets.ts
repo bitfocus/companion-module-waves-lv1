@@ -2,13 +2,9 @@
 // (mute, solo, fader moves and fades, plugin switches), Mute All, mute groups, scenes, eMotion
 // functions, Talk Back and flips. Names and values on the buttons follow the desk live.
 
-import {
-	CompanionPresetDefinitions,
-	combineRgb,
-	type CompanionPresetAction,
-	type CompanionPresetFeedback,
-} from '@companion-module/base'
+import { combineRgb, type CompanionPresetAction, type CompanionPresetFeedback } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import type { Preset } from './preset-structure.js'
 import {
 	MUTE_ALL,
 	MUTE_GROUPS,
@@ -37,9 +33,9 @@ function button(
 	feedbacks: CompanionPresetFeedback[] = [],
 	up: CompanionPresetAction[] = [],
 	size: 'auto' | '7' | '14' | '18' | '24' = '14',
-) {
+): Preset {
 	return {
-		type: 'button' as const,
+		type: 'simple',
 		category,
 		name,
 		style: { text, size, color: WHITE, bgcolor: BLACK },
@@ -53,8 +49,35 @@ const fn = (id: number) => ({
 	options: { fn: String(id), strip: '0:0', number: '1', phase: 'tap' },
 })
 
-export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
-	const presets: CompanionPresetDefinitions = {}
+/** The VU of a flip button: a thin vertical gauge on the right edge, green / yellow / red. */
+const flipMeter = {
+	id: 'vu',
+	name: 'VU',
+	type: 'gauge' as const,
+	x: 92.4,
+	y: 0,
+	width: 7.6,
+	height: 100,
+	value: { isExpression: true as const, value: '$(local:meter)' },
+	min: 0,
+	max: 100,
+	orientation: 'vertical' as const,
+	roundedEnds: true,
+	fillEnabled: true,
+	multiColour: true,
+	fillWidth: 100,
+	trackWidth: 100,
+	trackStyle: 'transparent' as const,
+	markerEnabled: false,
+	stops: [
+		{ value: 0, color: 0x00ff00, gradient: false },
+		{ value: 66, color: 0xffff00, gradient: false },
+		{ value: 85, color: 0xff0000, gradient: false },
+	],
+}
+
+export function surfacePresets(self: LV1Instance): Record<string, Preset> {
+	const presets: Record<string, Preset> = {}
 	const label = self.label
 
 	for (const mixer of SURFACE_MIXERS) {
@@ -62,15 +85,28 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 			for (const tr of self.surfaceModel.list(t.tt)) {
 				const aux = `${t.tt}:${tr.track}`
 				presets[`flip_${mixer.id}_${t.slug}${tr.track + 1}`] = {
-					type: 'button',
+					type: 'layered',
 					category: `Flip ${mixer.label}`,
 					name: `Flip ${mixer.label} to ${t.label} ${tr.track + 1}`,
-					style: {
-						text: `${mixer.label}\n$(${label}:${t.slug}${tr.track + 1}_name)`,
-						size: '14',
-						color: WHITE,
-						bgcolor: BLACK,
-					},
+					elements: [
+						{ id: 'box0', name: 'Background', type: 'box', x: 0, y: 0, width: 100, height: 100, color: BLACK },
+						flipMeter,
+						{
+							id: 'text0',
+							name: 'Text',
+							type: 'text',
+							x: 0,
+							y: 0,
+							width: 100,
+							height: 100,
+							text: `${mixer.label}\n$(${label}:${t.slug}${tr.track + 1}_name)`,
+							fontsize: 29.4,
+							fontsizeAllowShrink: true,
+							color: WHITE,
+							halign: 'center',
+							valign: 'center',
+						},
+					],
 					steps: [
 						{
 							down: [{ actionId: 'surfaceFlip', options: { mixer: mixer.id, aux, state: 'toggle', state_expr: '' } }],
@@ -81,7 +117,18 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 						{
 							feedbackId: 'surfaceFlip',
 							options: { mixer: mixer.id, aux },
-							style: { bgcolor: BLUE, color: WHITE },
+							styleOverrides: [
+								{ elementId: 'box0', elementProperty: 'color', override: BLUE },
+								{ elementId: 'text0', elementProperty: 'color', override: WHITE },
+							],
+						},
+					],
+					localVariables: [
+						{
+							variableType: 'feedback',
+							variableName: 'meter',
+							feedbackId: 'surfaceMeter',
+							options: { strip: aux, leg: 'max' },
 						},
 					],
 				}
@@ -91,7 +138,7 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 
 	for (let p = 1; p <= 8; p++) {
 		presets[`tb_preset_${p}`] = {
-			type: 'button',
+			type: 'simple',
 			category: 'Talk Back',
 			name: `Talk Back preset ${p}`,
 			style: { text: `TB\nPRESET ${p}`, size: '14', color: WHITE, bgcolor: BLACK },
@@ -160,6 +207,8 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 			)
 			const plugin = (pluginName: string, param: string, text: string, key: string) => {
 				if (!slots.includes(pluginName)) return
+				const read = [...self.surfaceModel.plugins.values()].some((p) => p.name === pluginName && p.params.size > 0)
+				if (!read) return
 				const opt = {
 					strip: id,
 					plugin: pluginName,
@@ -297,7 +346,7 @@ export function surfacePresets(self: LV1Instance): CompanionPresetDefinitions {
 	presets.emotion_selected = button('eMotion', 'Selected channel', `SELECTED\n$(${label}:selected_channel)`, [fn(18)])
 
 	presets.tb_talk = {
-		type: 'button',
+		type: 'simple',
 		category: 'Talk Back',
 		name: 'TALK (hold)',
 		style: { text: 'TALK', size: '18', color: WHITE, bgcolor: BLACK },

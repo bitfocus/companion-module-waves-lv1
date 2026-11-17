@@ -4,7 +4,7 @@ import { getDiscoveryCache, refreshDiscovery } from './discovery-cache.js'
 import { multicastInterfaces } from './zdns-discover.js'
 import { SURFACE_DEFAULT_PORT } from './surface.js'
 
-export interface ModuleConfig {
+export type ModuleConfig = {
 	/** Encoded "ip:port" picked from the discovered-LV1s dropdown. Empty = use custom host/port. */
 	selected: string
 	/** Manual override IP. Used if `selected` is empty. Blank = auto-discover first LV1. */

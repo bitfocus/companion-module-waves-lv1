@@ -4,6 +4,7 @@
 
 import { CompanionActionDefinitions, CompanionFeedbackDefinitions, combineRgb } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { optionText } from './definitions.js'
 import { SurfaceControls } from './surface.js'
 import { FLIP_ALL_SELECTION, SURFACE_MIXERS, TB_PRESET } from './surface-model.js'
 import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
@@ -52,7 +53,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 			options: [mixerField(true), auxField(self), ...onOffToggle('Flip on', 'Flip off')],
 			callback: async (a, context) => {
 				const { tt, track } = parseStrip(a.options.aux)
-				const mixer = String(a.options.mixer)
+				const mixer = optionText(a.options.mixer)
 				const views = mixer === 'all' ? SURFACE_MIXERS : SURFACE_MIXERS.filter((m) => m.id === mixer)
 				const current = views.every((m) => self.surfaceModel.isFlipped(m.surface, tt, track))
 				const want = await desiredState(a.options, context, current)
@@ -98,14 +99,14 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 				phaseField(),
 			],
 			callback: async (a, context) => {
-				const id = parseInt(String(a.options.fn), 10)
+				const id = parseInt(optionText(a.options.fn), 10)
 				const f = SURFACE_FUNCTIONS.find((x) => x.id === id)
 				if (!f) return
 				const needsTrack = f.param === 'track' || f.param === 'track+number'
 				const needsNumber = f.param === 'number' || f.param === 'track+number'
 				const { tt, track } = needsTrack ? parseStrip(a.options.strip) : { tt: -1, track: -1 }
 				const number = needsNumber ? Math.round(await resolveNumberAsync(a.options, 'number', context, 1)) : -1
-				const phase = String(a.options.phase ?? 'tap') as 'tap' | 'down' | 'up'
+				const phase = (optionText(a.options.phase) || 'tap') as 'tap' | 'down' | 'up'
 				self.surfaceRunFunction(f.id, number, tt, track, phase)
 			},
 		},
