@@ -188,6 +188,10 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	/** eMotion shortcuts registered on our surface this connection: `${fn}.${sel}.${tt}.${track}` → slot. */
 	private surfaceKeys = new Map<string, number>()
 	private nextSurfaceSlot = 1
+	/** eMotion functions pressed (Press / Toggle) and not released yet, by function key. */
+	private surfaceHeld = new Set<string>()
+	/** Modifier keys held on the eMotion computer through the driver (key ctrl|alt|shift). */
+	private surfaceKeysDown = new Set<string>()
 	private surfaceDefsTimer: NodeJS.Timeout | null = null
 	/** Running fades, key = the control being faded. */
 	private surfaceFades = new Map<string, NodeJS.Timeout>()
@@ -278,7 +282,8 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			(this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote') ||
 			this.config.surfacePort !== config.surfacePort ||
 			this.config.surfacePassword !== config.surfacePassword ||
-			this.config.surfaceHost !== config.surfaceHost
+			this.config.surfaceHost !== config.surfaceHost ||
+			(this.config.surfaceSelected ?? '') !== (config.surfaceSelected ?? '')
 		const modeChanged = (this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote')
 		this.config = config
 
@@ -351,7 +356,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	}
 
 	getConfigFields(): SomeCompanionConfigField[] {
-		return GetConfigFields(this.label)
+		return GetConfigFields(this.label, this.config)
 	}
 
 	updateActions(): void {
@@ -372,9 +377,21 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	private async connectIfReady(): Promise<void> {
 		let host = ''
 		let port = 0
+		const surfaceMode = this.config.mode === 'surface'
+
+		// Companion Surface mode only needs the desk computer's IP (the driver has a fixed port):
+		// the override field, else the LV1 picked from its list, else the first one found below.
+		if (surfaceMode) {
+			const ip = this.config.surfaceHost?.trim() || this.config.surfaceSelected || ''
+			if (ip) {
+				this.lastHost = ip
+				this.startSurfaceClient(ip)
+				return
+			}
+		}
 
 		// Priority 1: user picked something from the "Discovered LV1" dropdown.
-		if (this.config.selected) {
+		if (this.config.selected && !surfaceMode) {
 			const cached = findInCache(this.config.selected)
 			if (cached) {
 				host = cached.addresses[0] || cached.host || ''
@@ -393,15 +410,9 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		}
 
 		// Priority 2: manual override fields. The host may force a different IP than the dropdown.
-		if (this.config.host?.trim()) host = this.config.host.trim()
-		if (this.config.port > 0) port = this.config.port
-
-		// Companion Surface mode only needs the desk computer's IP: the driver has a fixed port.
-		const surfaceMode = this.config.mode === 'surface'
-		if (surfaceMode && this.config.surfaceHost?.trim()) {
-			this.lastHost = this.config.surfaceHost.trim()
-			this.startSurfaceClient(this.lastHost)
-			return
+		if (!surfaceMode) {
+			if (this.config.host?.trim()) host = this.config.host.trim()
+			if (this.config.port > 0) port = this.config.port
 		}
 
 		// Priority 3: if we still have no host or no port, try a one-shot discovery.
@@ -493,6 +504,9 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			this.surfaceModel.reset()
 			this.surfaceKeys.clear()
 			this.nextSurfaceSlot = 1
+			this.surfaceHeld.clear()
+			this.surfaceKeysDown.clear() // the driver lets go of the keys of a client that disconnects
+			this.checkFeedbacks('surfaceFunctionHeld', 'surfaceKeyHeld')
 			// Flip state comes from eMotion's InterMapper messages; names and counts from the tracks.
 			s.write('sub im 1')
 			s.write('sub meters 1')
@@ -562,6 +576,8 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 				// Loading a session clears the shortcuts registered on our surface: register again.
 				this.surfaceKeys.clear()
 				this.nextSurfaceSlot = 1
+				this.surfaceHeld.clear()
+				this.checkFeedbacks('surfaceFunctionHeld')
 				this.surfaceScheduleReread()
 			}
 			if (!this.surfaceModel.applySignal(sig.name, sig.args)) return
@@ -998,23 +1014,56 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		}
 	}
 
+	/**
+	 * Hold / release / toggle a modifier key on the eMotion computer (driver 0.1.21+). They are real
+	 * key presses there, so Ctrl and Alt can be held together (eMotion's Alt / Ctrl functions cannot)
+	 * and Ctrl + Alt + drag rotates a pan knob from the touch screen.
+	 */
+	surfaceSetKey(key: 'ctrl' | 'alt' | 'shift', mode: 'down' | 'up' | 'toggle'): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const down = mode === 'toggle' ? !this.surfaceKeysDown.has(key) : mode === 'down'
+		if (down) this.surfaceKeysDown.add(key)
+		else this.surfaceKeysDown.delete(key)
+		s.write(`key ${key} ${down ? 1 : 0}`)
+		this.checkFeedbacks('surfaceKeyHeld')
+	}
+
+	surfaceKeyHeld(key: string): boolean {
+		return this.surfaceKeysDown.has(key)
+	}
+
+	/** True while this module holds an eMotion function down (Press or Toggle, not released yet). */
+	surfaceFunctionHeld(fn: number): boolean {
+		for (const key of this.surfaceHeld) if (key.startsWith(`${fn}.`)) return true
+		return false
+	}
+
 	surfaceRunFunction(
 		fn: number,
 		selection: number,
 		tt: number,
 		track: number,
-		phase: 'tap' | 'down' | 'up' = 'tap',
+		phase: 'tap' | 'down' | 'up' | 'toggle' = 'tap',
 	): void {
 		const s = this.surface
 		if (!s?.isReady()) {
 			this.log('warn', 'Companion Surface is not connected — action ignored')
 			return
 		}
-		const press = (slot: number) => {
-			if (phase !== 'up') s.write(`ukdown ${slot}`)
-			if (phase !== 'down') s.write(`ukup ${slot}`)
-		}
 		const key = `${fn}.${selection}.${tt}.${track}`
+		// Toggle = Press, then Release on the next push (Ctrl / Alt latched from one button).
+		const step = phase === 'toggle' ? (this.surfaceHeld.has(key) ? 'up' : 'down') : phase
+		if (step === 'down') this.surfaceHeld.add(key)
+		else this.surfaceHeld.delete(key)
+		this.checkFeedbacks('surfaceFunctionHeld')
+		const press = (slot: number) => {
+			if (step !== 'up') s.write(`ukdown ${slot}`)
+			if (step !== 'down') s.write(`ukup ${slot}`)
+		}
 		const known = this.surfaceKeys.get(key)
 		if (known != null) {
 			press(known)
@@ -1041,6 +1090,15 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
 		this.surfaceRereadTimer = null
 		this.surfaceStopNameRefresh()
+		// A key left pressed (Ctrl / Alt toggled on) would stay held in eMotion: release it.
+		if (this.surface?.isReady())
+			for (const key of this.surfaceHeld) {
+				const slot = this.surfaceKeys.get(key)
+				if (slot != null) this.surface.write(`ukup ${slot}`)
+			}
+		this.surfaceHeld.clear()
+		if (this.surface?.isReady()) for (const key of this.surfaceKeysDown) this.surface.write(`key ${key} 0`)
+		this.surfaceKeysDown.clear()
 		// eMotion keeps counting our meter registrations: release them when the module stops.
 		if (this.surface?.isReady())
 			for (const key of this.surfaceMeterRefs.keys()) {

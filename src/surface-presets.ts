@@ -49,6 +49,13 @@ const fn = (id: number) => ({
 	options: { fn: String(id), strip: '0:0', number: '1', phase: 'tap' },
 })
 
+/** Modifier keys held on the eMotion computer (real key presses: Ctrl and Alt together work). */
+const HOLD_KEYS = [
+	{ key: 'ctrl', label: 'Ctrl' },
+	{ key: 'alt', label: 'Alt' },
+]
+const keyAction = (key: string, mode: 'down' | 'up' | 'toggle') => ({ actionId: 'surfaceKey', options: { key, mode } })
+
 /** The VU of a flip button: a thin vertical gauge on the right edge, green / yellow / red. */
 const flipMeter = {
 	id: 'vu',
@@ -345,6 +352,25 @@ export function surfacePresets(self: LV1Instance): Record<string, Preset> {
 	presets.emotion_prev_ch = button('eMotion', 'Previous channel', 'PREV\nCHANNEL', [fn(14)])
 	presets.emotion_next_ch = button('eMotion', 'Next channel', 'NEXT\nCHANNEL', [fn(15)])
 	presets.emotion_selected = button('eMotion', 'Selected channel', `SELECTED\n$(${label}:selected_channel)`, [fn(18)])
+	// Alt / Ctrl: held while the button is held (momentary), or latched by one push and released by the next (toggle).
+	for (const k of HOLD_KEYS) {
+		const held = [{ feedbackId: 'surfaceKeyHeld', options: { key: k.key }, style: { bgcolor: BLUE, color: WHITE } }]
+		presets[`emotion_${k.key}_momentary`] = button(
+			'eMotion',
+			`${k.label} (momentary)`,
+			`${k.label.toUpperCase()}\nMOMENTARY`,
+			[keyAction(k.key, 'down')],
+			held,
+			[keyAction(k.key, 'up')],
+		)
+		presets[`emotion_${k.key}_toggle`] = button(
+			'eMotion',
+			`${k.label} (toggle)`,
+			`${k.label.toUpperCase()}\nTOGGLE`,
+			[keyAction(k.key, 'toggle')],
+			held,
+		)
+	}
 
 	presets.tb_talk = {
 		type: 'simple',

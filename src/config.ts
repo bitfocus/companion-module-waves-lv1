@@ -20,8 +20,11 @@ export type ModuleConfig = {
 	surfacePort?: number
 	/** Password set in the Companion Surface .ini (blank = none). */
 	surfacePassword?: string
-	/** IP of the eMotion LV1 computer in Companion Surface mode. Blank = find the LV1 on the network. */
+	/** IP of the eMotion LV1 computer in Companion Surface mode (override). Blank = the LV1 picked in
+	 *  `surfaceSelected`, else the first one found on the network. */
 	surfaceHost?: string
+	/** Companion Surface mode: IP of the LV1 picked from the discovered list. Empty = automatic. */
+	surfaceSelected?: string
 }
 
 const IPV4_OR_EMPTY = '/^$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)$/'
@@ -40,7 +43,7 @@ function installLinks(label: string): string {
 	return ips.map((ip) => `http://${ip}:8000${path}`).join('\n')
 }
 
-export function GetConfigFields(label = ''): SomeCompanionConfigField[] {
+export function GetConfigFields(label = '', config?: Partial<ModuleConfig>): SomeCompanionConfigField[] {
 	const { entries, ageMs } = getDiscoveryCache()
 
 	// Kick off a fresh discovery in the background every time the config dialog opens.
@@ -78,6 +81,27 @@ export function GetConfigFields(label = ''): SomeCompanionConfigField[] {
 		})),
 	]
 
+	// Companion Surface mode needs only the computer's IP (the driver has a fixed port): one entry per IP.
+	const surfaceChoices = [
+		{ id: '', label: entries.length ? 'Automatic: first LV1 found' : 'Automatic: none found yet' },
+	]
+	for (const e of entries) {
+		const ip = e.addresses[0]
+		if (ip && !surfaceChoices.some((c) => c.id === ip))
+			surfaceChoices.push({ id: ip, label: `${e.host || 'unknown'}  —  ${ip}` })
+	}
+	// Keep the saved pick valid while that desk is off (Companion checks values against the choices).
+	const saved = config?.surfaceSelected
+	if (saved && !surfaceChoices.some((c) => c.id === saved))
+		surfaceChoices.push({ id: saved, label: `${saved} (not found now)` })
+	const surfaceDiscovery =
+		entries.length === 0
+			? `⏳ No LV1 found yet. A scan is running in the background — close this dialog and reopen it in a few seconds.\n\n` +
+				`Scanning on: ${ifaceList}\n\n` +
+				`If the LV1 computer is on another subnet (routed network, VPN, Companion in Docker), type its IP below.`
+			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} found (cached ${ageStr}). Reopen this dialog to see a fresh scan.\n\n` +
+				`Scanning on: ${ifaceList}`
+
 	const surfaceOnly = "$(options:mode) == 'surface'"
 	const myRemoteOnly = "$(options:mode) != 'surface'"
 
@@ -107,12 +131,29 @@ export function GetConfigFields(label = ''): SomeCompanionConfigField[] {
 				'In this mode the module talks only to Companion Surface; MyRemote is not used.',
 		},
 		{
+			type: 'static-text',
+			id: 'surface_discovery',
+			label: 'Discovery',
+			width: 12,
+			isVisibleExpression: surfaceOnly,
+			value: surfaceDiscovery,
+		},
+		{
+			type: 'dropdown',
+			id: 'surfaceSelected',
+			label: 'Discovered LV1',
+			width: 12,
+			default: '',
+			choices: surfaceChoices,
+			isVisibleExpression: surfaceOnly,
+		},
+		{
 			type: 'textinput',
 			id: 'surfaceHost',
-			label: 'eMotion LV1 computer IP',
+			label: 'eMotion LV1 computer IP (override)',
 			width: 6,
 			default: '',
-			tooltip: 'Leave blank to use the LV1 found on the network.',
+			tooltip: 'Optional: only when the LV1 is not in the list above. Blank = use the list.',
 			regex: IPV4_OR_EMPTY,
 			isVisibleExpression: surfaceOnly,
 		},

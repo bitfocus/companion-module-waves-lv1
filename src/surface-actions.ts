@@ -29,11 +29,13 @@ function phaseField(): AnyOpt {
 		label: 'Key',
 		default: 'tap',
 		tooltip:
-			'Tap = press and release. Use Press on the button-down step and Release on the button-up step for hold keys (Alt, Ctrl).',
+			'Tap = press and release. Hold keys (Alt, Ctrl): Press on the button-down step and Release on the button-up step ' +
+			'(momentary), or Toggle (press on one push, release on the next).',
 		choices: [
 			{ id: 'tap', label: 'Tap (press + release)' },
 			{ id: 'down', label: 'Press only' },
 			{ id: 'up', label: 'Release only' },
+			{ id: 'toggle', label: 'Toggle (press / release on alternate pushes)' },
 		],
 	}
 }
@@ -88,6 +90,43 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 			},
 		},
 
+		surfaceKey: {
+			name: 'Keyboard: Ctrl / Alt / Shift on the eMotion computer',
+			description:
+				'Holds a key down on the eMotion computer, like its keyboard: Ctrl and Alt can be held together ' +
+				'(Ctrl + Alt + drag on a pan knob = rotation). Keys go up again when Companion disconnects.',
+			options: [
+				{
+					type: 'dropdown',
+					id: 'key',
+					label: 'Key',
+					default: 'ctrl',
+					choices: [
+						{ id: 'ctrl', label: 'Ctrl' },
+						{ id: 'alt', label: 'Alt' },
+						{ id: 'shift', label: 'Shift' },
+					],
+				},
+				{
+					type: 'dropdown',
+					id: 'mode',
+					label: 'Action',
+					default: 'toggle',
+					choices: [
+						{ id: 'down', label: 'Press (hold down)' },
+						{ id: 'up', label: 'Release' },
+						{ id: 'toggle', label: 'Toggle (press / release on alternate pushes)' },
+					],
+				},
+			],
+			callback: (a) => {
+				const key = optionText(a.options.key)
+				const mode = optionText(a.options.mode)
+				if (key !== 'ctrl' && key !== 'alt' && key !== 'shift') return
+				self.surfaceSetKey(key, mode === 'down' || mode === 'up' ? mode : 'toggle')
+			},
+		},
+
 		surfaceFunction: {
 			name: 'eMotion function (shortcut)',
 			description:
@@ -110,7 +149,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 				const needsNumber = f.param === 'number' || f.param === 'track+number'
 				const { tt, track } = needsTrack ? parseStrip(a.options.strip) : { tt: -1, track: -1 }
 				const number = needsNumber ? Math.round(await resolveNumberAsync(a.options, 'number', context, 1)) : -1
-				const phase = (optionText(a.options.phase) || 'tap') as 'tap' | 'down' | 'up'
+				const phase = (optionText(a.options.phase) || 'tap') as 'tap' | 'down' | 'up' | 'toggle'
 				self.surfaceRunFunction(f.id, number, tt, track, phase)
 			},
 		},
@@ -146,6 +185,43 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinitions {
 	return {
 		...featureFeedbacks(self),
+		surfaceKeyHeld: {
+			type: 'boolean',
+			name: 'Keyboard: key is held (Ctrl, Alt, Shift)',
+			description: 'True while this connection holds that key down on the eMotion computer.',
+			defaultStyle: { bgcolor: combineRgb(0, 120, 200), color: combineRgb(255, 255, 255) },
+			options: [
+				{
+					type: 'dropdown',
+					id: 'key',
+					label: 'Key',
+					default: 'ctrl',
+					choices: [
+						{ id: 'ctrl', label: 'Ctrl' },
+						{ id: 'alt', label: 'Alt' },
+						{ id: 'shift', label: 'Shift' },
+					],
+				},
+			],
+			callback: (fb) => self.surfaceKeyHeld(optionText(fb.options.key)),
+		},
+		surfaceFunctionHeld: {
+			type: 'boolean',
+			name: 'eMotion function is held (Alt, Ctrl…)',
+			description:
+				'True while this connection holds that function down: pressed (Press or Toggle) and not released yet.',
+			defaultStyle: { bgcolor: combineRgb(0, 120, 200), color: combineRgb(255, 255, 255) },
+			options: [
+				{
+					type: 'dropdown',
+					id: 'fn',
+					label: 'Function',
+					default: '46',
+					choices: SURFACE_FUNCTIONS.map((f) => ({ id: String(f.id), label: f.name })),
+				},
+			],
+			callback: (fb) => self.surfaceFunctionHeld(parseInt(optionText(fb.options.fn), 10)),
+		},
 		surfaceFlip: {
 			type: 'boolean',
 			name: 'Flip: Mixer is flipped to aux',
