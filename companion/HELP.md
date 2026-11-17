@@ -251,6 +251,9 @@ With it the module does everything over the network, without MyRemote:
 - **eMotion plugins**: any parameter, picked by plugin and parameter name, with
   fades; slot bypass (slots 1-8) and rack In / Out
 - **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…)
+- **Ctrl / Alt / Shift** held on the eMotion computer like its keyboard (momentary
+  or toggle presets): Ctrl and Alt together work, so Ctrl + Alt + drag rotates a
+  pan knob from the touch screen. Keys go up again when Companion disconnects
 - **VU meters**: the _Strip: VU meter level_ feedback gives 0-100 for a Gauge
   element (the flip presets come with one)
 
@@ -263,10 +266,17 @@ Each one has a feedback that follows changes made on the desk.
    `http://<Companion's IP>:8000/instance/<connection label>/surface`
    (use your Companion web port if it is not 8000) and download the installer.
    The page works without internet access.
-3. Close eMotion LV1 and run the installer (Windows).
+3. Close eMotion LV1 and run the installer: the page has one for Windows and
+   one for macOS. Neither is signed: on Windows click **More info → Run
+   anyway**; on macOS, if the installer will not open, go to **System Settings →
+   Privacy & Security → Open Anyway**.
 4. Start eMotion LV1, open the **Controls** panel, add **Companion Surface**
    and save. Its gear button shows the computer's addresses, the connected
    Companion and the port / password settings.
+5. Back in the connection settings, close and reopen the dialog, pick the desk
+   in **Discovered LV1** (or leave it on **Automatic**) and save. Type its IP in
+   **eMotion LV1 computer IP (override)** only when it is not listed (routed
+   network, VPN, Companion in Docker).
 
 The driver listens on TCP port 9460. In this mode the module talks only to
 Companion Surface: MyRemote is not used and does not need to be enabled. If the
@@ -280,11 +290,13 @@ gear window (Controls panel → Companion Surface → gear):
 
 - **Lock screen image per session.** While eMotion is locked, an image covers
   the mixer area (the top bar with the lock button stays visible). Put the
-  images in `C:\ProgramData\Companion Surface\Lock Images`: `My Show.png` is
+  images in `C:\ProgramData\Companion Surface\Lock Images` (macOS:
+  `/Users/Shared/Companion Surface/Lock Images`): `My Show.png` is
   used for the session "My Show", `PSM_%.png` for every session whose name
   starts with `PSM_` (`%` = any text; Windows does not allow `*` in file names),
   and `default.png` for all others. PNG, JPG or BMP; Fit / Fill / Stretch; a
   Preview button shows the image for 5 seconds.
+- On macOS Ctrl is the **Control** key and Alt the **Option** key, as in eMotion.
 - **Ctrl+Alt + drag on a pan knob changes the rotation** of a stereo strip
   (eMotion has Ctrl + drag for the width). In sends on fader it changes the
   rotation of the send.
