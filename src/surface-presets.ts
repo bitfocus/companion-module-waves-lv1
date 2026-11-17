@@ -68,6 +68,7 @@ const flipMeter = {
 	fillWidth: 100,
 	trackWidth: 100,
 	trackStyle: 'transparent' as const,
+	trackAmount: 7,
 	markerEnabled: false,
 	stops: [
 		{ value: 0, color: 0x00ff00, gradient: false },
