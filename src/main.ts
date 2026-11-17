@@ -241,7 +241,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		this.updateFeedbacks()
 		this.updatePresets()
 		this.updateVariables()
-		await this.connectIfReady()
+		this.connectInBackground()
 	}
 
 	async destroy(): Promise<void> {
@@ -279,8 +279,11 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			this.config.surfacePort !== config.surfacePort ||
 			this.config.surfacePassword !== config.surfacePassword ||
 			this.config.surfaceHost !== config.surfaceHost
+		const modeChanged = (this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote')
 		this.config = config
 
+		// The other mode's presets would point at actions that no longer exist.
+		if (modeChanged) this.setPresetDefinitions([], {})
 		this.updateActions()
 		this.updateFeedbacks()
 		this.updatePresets()
@@ -335,8 +338,16 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			this.checkAllFeedbacks()
 			cancelDiscovery()
 			this.stopConnectScan()
-			await this.connectIfReady()
+			this.connectInBackground()
 		}
+	}
+
+	/** Connect without holding up init / configUpdated: a MyRemote connect may first run a
+	 *  discovery scan of several seconds, longer than Companion waits for those calls. */
+	private connectInBackground(): void {
+		this.connectIfReady().catch((e: unknown) =>
+			this.log('error', `Connect failed: ${e instanceof Error ? e.message : String(e)}`),
+		)
 	}
 
 	getConfigFields(): SomeCompanionConfigField[] {
