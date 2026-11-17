@@ -273,6 +273,29 @@ Companion Surface: MyRemote is not used and does not need to be enabled. If the
 driver on the desk is older than the one in this module, the connection status
 says so: install it again from the same page.
 
+### In eMotion itself
+
+The driver also adds a few things to eMotion. Each can be turned off in its
+gear window (Controls panel → Companion Surface → gear):
+
+- **Lock screen image per session.** While eMotion is locked, an image covers
+  the mixer area (the top bar with the lock button stays visible). Put the
+  images in `C:\ProgramData\Companion Surface\Lock Images`: `My Show.png` is
+  used for the session "My Show", `PSM_%.png` for every session whose name
+  starts with `PSM_` (`%` = any text; Windows does not allow `*` in file names),
+  and `default.png` for all others. PNG, JPG or BMP; Fit / Fill / Stretch; a
+  Preview button shows the image for 5 seconds.
+- **Ctrl+Alt + drag on a pan knob changes the rotation** of a stereo strip
+  (eMotion has Ctrl + drag for the width). In sends on fader it changes the
+  rotation of the send.
+- **Hold Ctrl** on the Mixer 1 / Mixer 2 page: every stereo strip's pan knob
+  shows its width; **hold Ctrl+Alt**: its rotation. The knob is drawn like
+  eMotion's (pointer on the rotation, L-R arc around it) with the value under
+  it. In sends on fader it shows the pans of the sends.
+
+Keep **Verbose log** off unless asked for it: it writes every change made on
+the desk to a file and slows eMotion down.
+
 ## Auto-discovery
 
 The LV1 broadcasts `/zDNS` on UDP multicast **`225.1.1.1:13337`**. Standard
