@@ -2,18 +2,28 @@
 
 [Bitfocus Companion](https://bitfocus.io/companion) module for controlling the
 [Waves LV1](https://www.waves.com/mixers-racks/lv1-live-mixer) digital mixer
-over its native OSC-over-TCP protocol.
+(eMotion LV1) over the network.
 
-Built on a complete reverse-engineering of the iPad MyFOH and iPhone MyMon
-apps plus the PC-side `MyMonService.dll` — every supported `/Set/…` action
-has been verified byte-for-byte against live captured traffic.
+> **Version 2.x needs Companion 5.0 or newer.** On Companion 4.x, use **1.2.1**.
 
-## Quick start
+## Two ways to connect
 
-Nothing needs to be installed on the LV1 machine — no plugin, driver, OSC relay
-or script. This module speaks the same protocol as the official iPad **MyFOH**
-app, so the desk already knows how to talk to it. Just make sure **eMotion LV1
-is running** and Companion is on the same network.
+Pick one in the connection settings, **Connect through**:
+
+|                     | **MyRemote**                                             | **Companion Surface**                                                                                                  |
+| ------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| What it is          | The protocol of Waves' MyFOH / MyMon apps (OSC over TCP) | A control-surface driver that runs inside eMotion LV1, like Waves' own LV1 Control and Mackie drivers                  |
+| Install on the desk | Nothing                                                  | The driver, from a page served by this module (Windows and macOS)                                                      |
+| Reach               | What MyRemote exposes                                    | The whole desk: flips without a page change, plugins and racks, Talk Back, every eMotion shortcut function, VU meters… |
+
+Both are maintained. Existing connections stay on MyRemote.
+
+## Quick start: MyRemote
+
+Nothing needs to be installed on the LV1 machine. This module speaks the same
+protocol as the official iPad **MyFOH** app, so the desk already knows how to
+talk to it. Just make sure **eMotion LV1 is running** and Companion is on the
+same network.
 
 1. Add the **Waves: LV1** connection in Companion.
 2. Open its config, wait a few seconds, then **close and reopen it** — the scan
@@ -32,7 +42,28 @@ If it doesn't connect, open Companion's log with Info messages enabled — the
 module names every network interface it scanned and reports why it failed. Full
 troubleshooting table in [`companion/HELP.md`](companion/HELP.md).
 
+## Quick start: Companion Surface
+
+1. Set **Connect through** to **Companion Surface**.
+2. On the computer that runs eMotion LV1, open the link shown in the settings
+   (`http://<Companion IP>:8000/instance/<connection label>/surface`). The page
+   works without internet and offers both installers:
+   - **Windows** 10 / 11 (x64): `CompanionSurface-Setup.exe`. Not signed: _More info → Run anyway_.
+   - **macOS** 11 or newer (Intel and Apple Silicon): `CompanionSurface-Setup.pkg`. Not signed by
+     Apple: _System Settings → Privacy & Security → Open Anyway_.
+3. Close eMotion, run the installer, start eMotion, open the **Controls** panel,
+   add **Companion Surface** and save. Its tile shows **ON** when Companion is connected.
+4. Back in Companion, pick the desk in **Discovered LV1** (or leave it on
+   **Automatic**) and save. Type its IP only for routed networks, VPN or Docker.
+
+The driver listens on TCP port 9460 (optional password, set on both sides).
+MyRemote is not used in this mode and doesn't need to be enabled. When the
+driver on the desk is older than the one in the module, the connection status
+says so: install it again from the same page.
+
 ## Features at a glance
+
+### MyRemote mode
 
 | Domain         | What you get                                                                                             |
 | -------------- | -------------------------------------------------------------------------------------------------------- |
@@ -52,9 +83,42 @@ troubleshooting table in [`companion/HELP.md`](companion/HELP.md).
 | eMotion v17    | v16 and v17 handled automatically — Monitor buses, 16 DCA/Links, 16 groups; experimental I/O patch       |
 | Raw            | Send any OSC address with typed args for what's not yet wrapped                                          |
 
-See `companion/HELP.md` for the full reference.
+### Companion Surface mode
 
-## Protocol highlights
+Every action has a feedback that follows changes made on the desk; presets are built from what the
+desk reports and their names follow it live.
+
+| Domain    | What you get                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------- |
+| Strips    | Channels, groups, FX and Monitor buses, matrices, links, LR, Center, Mono: fader in dB with fades, mute, solo   |
+| Mutes     | Desk-style mute feedback (blinks when muted by a mute group, Mute All or a Link), Mute All, mute groups         |
+| Flips     | Sends on fader to any FX / Monitor send, for Mixer 1, Mixer 2 and the All page; eMotion keeps its page          |
+| Talk Back | TALK and the Talk Back presets, as in eMotion's panel                                                           |
+| Plugins   | Any parameter of any plugin in a rack, by plugin and parameter name, with fades; slot bypass 1-8; rack In / Out |
+| eMotion   | Every shortcut function (scenes, lock, clear solo, tap tempo, recording, save session, navigation…)             |
+| Keyboard  | Ctrl / Alt / Shift held on the eMotion computer (Windows), momentary or toggle                                  |
+| Meters    | VU level 0-100 for a Gauge element; flip presets carry one                                                      |
+| Variables | Strip names, faders, mutes, solos; flips per mixer; scene, session, tempo, lock, recording, solo, Talk Back     |
+
+The driver also adds a few things to eMotion itself, each one optional in its
+settings window: an image per session while eMotion is locked, Ctrl + Alt + drag
+on a pan knob for the rotation, and holding Ctrl / Ctrl + Alt on the Mixer pages
+to see every stereo strip's width / rotation (on macOS: Control and Option).
+
+See [`companion/HELP.md`](companion/HELP.md) for the full reference.
+
+## Why this package contains an .exe and a .pkg
+
+`surface/CompanionSurface-Setup.exe` (Windows) and `surface/CompanionSurface-Setup.pkg`
+(macOS) are the installers of the Companion Surface driver. The driver has to be
+installed on the computer that runs eMotion LV1, which is usually not the
+Companion machine and is often offline at FOH, so the module carries both
+installers (`build-config.cjs`, `extraFiles`) and serves them from its own HTTP
+handler. The files travel base64-encoded inside that page, because Companion's
+HTTP bridge only carries text. Companion and the module never run them; they are
+only offered as downloads. MyRemote mode does not need them.
+
+## Protocol highlights (MyRemote)
 
 - **Custom 8-byte framing** per OSC packet (`[4B BE size][8B header][N bytes
 OSC]`). Plain OSC clients fail silently.
@@ -69,6 +133,9 @@ OSC]`). Plain OSC clients fail silently.
 - **Mixer-mode changes** (16 → 32 → 64 → 80 ch and aux variants) trigger a
   LV1 port change; the module re-discovers and re-handshakes automatically
   with no user intervention.
+
+Companion Surface uses its own text protocol over TCP, one line per message;
+see [`src/surface-client.ts`](src/surface-client.ts).
 
 ## Building
 
@@ -87,35 +154,54 @@ Output goes to `dist/`. To test in Companion locally, point Companion's
 ```bash
 yarn dev          # tsc --watch
 yarn lint
-yarn package      # build + companion-module-build for distribution
+yarn test
+yarn package      # build + companion-module-build for distribution (includes surface/)
 ```
+
+The driver itself is built separately; its installers are committed in
+`surface/` and its version is `SURFACE_DRIVER_VERSION` in `src/surface.ts`.
 
 ## Repository layout
 
 ```
 companion/
-  manifest.json      # Companion module metadata
-  HELP.md            # in-app help shown to users
+  manifest.json        # Companion module metadata
+  HELP.md              # in-app help shown to users
+surface/               # Companion Surface installers (Windows .exe, macOS .pkg)
+build-config.cjs       # ships surface/ with the package
 src/
-  main.ts            # InstanceBase entrypoint, /Notify/... state handler
-  actions.ts         # action definitions (the buttons you bind)
-  feedbacks.ts       # boolean/advanced feedback definitions
-  variables.ts       # exposed text variables
-  presets.ts         # starter button templates
-  config.ts          # config dialog fields
-  tracks.ts          # track-picker helpers (group + per-group ch dropdowns)
-  osc.ts             # minimal OSC encoder/decoder
-  osc-tcp.ts         # framed TCP client + handshake + auto-pong
-  zdns-discover.ts   # custom Waves multicast discovery
-  discovery-cache.ts # one-shot scan + dedup
-  upgrades.ts        # forward-compat scripts
+  main.ts              # InstanceBase entrypoint, both connection modes
+  config.ts            # config dialog fields
+  upgrades.ts          # upgrade scripts
+  # MyRemote mode
+  actions.ts           # action definitions
+  feedbacks.ts         # boolean/advanced feedback definitions
+  variables.ts         # exposed text variables
+  presets.ts           # starter button templates
+  tracks.ts            # track-picker helpers (group + per-group ch dropdowns)
+  osc.ts               # minimal OSC encoder/decoder
+  osc-tcp.ts           # framed TCP client + handshake + auto-pong
+  zdns-discover.ts     # custom Waves multicast discovery
+  discovery-cache.ts   # one-shot scan + dedup
+  # Companion Surface mode
+  surface.ts           # driver version, install page
+  surface-client.ts    # TCP client for the driver
+  surface-model.ts     # what the driver reported (tracks, flips, Talk Back)
+  surface-actions.ts   # actions and feedbacks
+  surface-features.ts  # strips, mutes, plugins, eMotion state
+  surface-functions.ts # eMotion shortcut functions
+  surface-presets.ts   # presets and variables
+  surface-ui.ts        # shared option fields
+tests/                 # node --test
 ```
 
 ## Disclaimer
 
 Community-built module. Not affiliated with, endorsed by, or supported by
-Waves Audio Ltd. Built by analysing public network traffic from the official
-MyFOH / MyMon apps and the bundled `MyMonService.dll`.
+Waves Audio Ltd. MyRemote mode was built by analysing public network traffic
+from the official MyFOH / MyMon apps and the bundled `MyMonService.dll`;
+Companion Surface is a control-surface driver loaded by eMotion LV1 the same way
+as Waves' own surface drivers.
 
 ## License
 
