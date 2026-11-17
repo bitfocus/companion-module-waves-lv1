@@ -197,6 +197,8 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	/** The desk's strips, racks and groups were read on this connection. */
 	private surfaceProbed = false
 	private surfaceRereadTimer: NodeJS.Timeout | null = null
+	/** Name re-reads after a connect (eMotion may still be loading its session then) and every minute. */
+	private surfaceNameTimers: NodeJS.Timeout[] = []
 	/** Plugin codes whose parameter catalogue was requested on this connection. */
 	private surfacePluginsAsked = new Set<string>()
 
@@ -491,6 +493,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
 			// Strips, racks and groups are read once the names say which tracks exist.
 			this.surfaceProbed = false
+			this.surfaceStartNameRefresh(s)
 			this.surfaceProblem =
 				version && compareVersions(version, SURFACE_DRIVER_VERSION) < 0
 					? `Companion Surface ${version} on the desk is older than ${SURFACE_DRIVER_VERSION} — reinstall it from the install page`
@@ -568,6 +571,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			failing = true
 		})
 		s.on('close', () => {
+			this.surfaceStopNameRefresh()
 			this.surfaceProblem = `Companion Surface on ${host}:${port} disconnected — retrying`
 			this.reportStatus()
 		})
@@ -579,6 +583,25 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	 * A session was loaded (also after a mixer configuration change, which keeps the driver
 	 * connected): read which tracks exist again, then the strips, racks and groups.
 	 */
+	/**
+	 * When eMotion has just started, the driver answers before the session is loaded: names read
+	 * then are empty or default. Read them again a few times after a connect, then every minute
+	 * (about 250 quick reads; definitions are rebuilt only when a name really changed).
+	 */
+	private surfaceStartNameRefresh(s: SurfaceClient): void {
+		this.surfaceStopNameRefresh()
+		const read = () => {
+			if (s.isReady()) for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+		}
+		for (const ms of [5000, 15000, 30000]) this.surfaceNameTimers.push(setTimeout(read, ms))
+		this.surfaceNameTimers.push(setInterval(read, 60000))
+	}
+
+	private surfaceStopNameRefresh(): void {
+		for (const t of this.surfaceNameTimers) clearTimeout(t)
+		this.surfaceNameTimers = []
+	}
+
 	private surfaceScheduleReread(): void {
 		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
 		this.surfaceRereadTimer = setTimeout(() => {
@@ -980,6 +1003,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		this.surfaceMeterTimer = null
 		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
 		this.surfaceRereadTimer = null
+		this.surfaceStopNameRefresh()
 		// eMotion keeps counting our meter registrations: release them when the module stops.
 		if (this.surface?.isReady())
 			for (const key of this.surfaceMeterRefs.keys()) {
