@@ -15,6 +15,7 @@ import {
 	combineRgb,
 } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { lockVisibilityFields } from './definitions.js'
 import {
 	channelsFor,
 	buildTrackPicker,
@@ -27,6 +28,7 @@ import {
 	buildRouteDestOptions,
 	resolveRouteDest,
 } from './tracks.js'
+import { surfaceFeedbacks } from './surface-actions.js'
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
 
@@ -209,6 +211,7 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 			name: 'Channel color (from LV1 GUI)',
 			description: 'Uses the channel color as button background.',
 			options: trackPicker,
+			affectedProperties: ['bgcolor'],
 			callback: async (fb, context) => {
 				const { group, ch } = await resolveTrackAsync(fb.options, context)
 				const c = self.channels.get(`${group}.${ch}`)?.color
@@ -302,5 +305,6 @@ export function UpdateFeedbacks(self: LV1Instance): void {
 		},
 	}
 
-	self.setFeedbackDefinitions(feedbacks)
+	// Companion Surface mode only offers what goes through the driver: MyRemote is not connected.
+	self.setFeedbackDefinitions(lockVisibilityFields(self.config.mode === 'surface' ? surfaceFeedbacks(self) : feedbacks))
 }

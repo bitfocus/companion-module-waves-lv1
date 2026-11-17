@@ -1,12 +1,21 @@
-// import { CompanionUpgradeContext } from '@companion-module/base'
-// import type { ModuleConfig } from './config.js'
+import type { CompanionStaticUpgradeScript } from '@companion-module/base'
+import type { ModuleConfig } from './config.js'
+import { SURFACE_DEFAULT_PORT } from './surface.js'
 
-export const UpgradeScripts = [
-	/*
-	function v1_0_0(context: CompanionUpgradeContext<ModuleConfig>): boolean {
-		// Example upgrade script from v0.x to v1.0.0
-		// Return true if any changes were made
-		return false
-	},
-	*/
-]
+/** 2.0.0: connection mode and Companion Surface port for connections created before they existed. */
+const v130SurfaceDefaults: CompanionStaticUpgradeScript<ModuleConfig> = (_context, props) => {
+	const config = props.config
+	if (!config || (config.mode && config.surfacePort))
+		return { updatedConfig: null, updatedActions: [], updatedFeedbacks: [] }
+	return {
+		updatedConfig: {
+			...config,
+			mode: config.mode ?? 'myremote',
+			surfacePort: config.surfacePort || SURFACE_DEFAULT_PORT,
+		},
+		updatedActions: [],
+		updatedFeedbacks: [],
+	}
+}
+
+export const UpgradeScripts: CompanionStaticUpgradeScript<ModuleConfig>[] = [v130SurfaceDefaults]

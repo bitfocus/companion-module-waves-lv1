@@ -2,32 +2,30 @@
 //
 // The LV1 has a fixed topology (standard groups + variable input/aux counts).
 // The dropdowns are built as a Group selector + a per-group Channel selector,
-// where the Channel field uses Companion's `isVisible` so only the right list
+// where the Channel field uses Companion's `isVisibleExpression` so only the right list
 // shows per selected group. Single-track groups (LR/C/M/Cue/TB) hide the
 // channel field entirely.
 //
 // Channel choices per group come from:
 //   group=0 (Input)   → /Notify/Layers inputLayers, or fallback to effectiveChannels()
-//   group=1 (Groups)  → /Channels count (8 or 16), default 8
+//   group=1 (Groups)  → /Channels count (8 or 16), default 16
 //   group=2 (Aux/FX)  → /Aux/Tracks names, or auxes count
-//   group=6 (Matrix)  → /Channels count, default 8
-//   group=12 (DCA)    → /Channels count (16 "Link" tracks on v17), default 8
+//   group=6 (Matrix)  → /Channels count, default 16
+//   group=12 (DCA)    → /Channels count (16 "Link" tracks on v17), default 16
 
 import type { DropdownChoice, CompanionInputFieldDropdown, CompanionInputFieldTextInput } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
 import { ROUTE_KINDS } from './routing.js'
 
 /** Sentinel used as a dropdown entry to switch that field into "custom
- *  expression" mode. A paired `<field>_expr` textinput becomes visible and
- *  the callback resolves it via `context.parseVariablesInString`. */
+ *  expression" mode. A paired `<field>_expr` textinput becomes visible; Companion
+ *  fills in its variables before the callback reads it. */
 export const CUSTOM_EXPR = '__custom'
 export const CUSTOM_EXPR_CHOICE: DropdownChoice = { id: CUSTOM_EXPR, label: '✎ Custom (expression)…' }
 
-/** Minimal shape of the callback context we rely on. Both action and
- *  feedback contexts expose `parseVariablesInString`. */
-export interface ExprContext {
-	parseVariablesInString(str: string): Promise<string>
-}
+/** The action / feedback callback context. Not needed any more to read option values (Companion
+ *  fills in variables before the callback), kept so the resolvers keep one signature. */
+export type ExprContext = unknown
 
 /** Companion option values are typed as `unknown`. Coerce safely to a string
  *  without triggering the "[object Object]" path. */
@@ -96,10 +94,12 @@ export const GROUP_CHOICES: DropdownChoice[] = [
  *  historic fixed 8. */
 export function busCount(self: LV1Instance, group: 1 | 6 | 12): number {
 	const n = self.detected.groupCounts?.[group]
-	return n && n > 0 && n <= 64 ? n : 8
+	// Until /Channels says, the largest v17 count: Companion checks saved option values against
+	// the dropdown choices, so a button on Group 12 must stay valid before the desk answers.
+	return n && n > 0 && n <= 64 ? n : 16
 }
 
-/** Per-group channel dropdown. Caller uses `isVisible: o => Number(o.group) === <g>`. */
+/** Per-group channel dropdown, shown for its own group only. */
 export function channelsFor(self: LV1Instance, group: number): DropdownChoice[] {
 	const named = (idx0: number, fallback: string): string => {
 		if (group === 2 && self.detected.auxNames?.[idx0]) return `${idx0 + 1} — ${self.detected.auxNames[idx0]}`
@@ -120,7 +120,8 @@ export function channelsFor(self: LV1Instance, group: number): DropdownChoice[] 
 			return out
 		}
 		case 2: {
-			const total = self.effectiveAuxes()
+			// Before the desk answers: every possible aux (16 FX + 32 Mon), see busCount.
+			const total = self.detected.auxes ?? 48
 			const out: DropdownChoice[] = []
 			for (let i = 0; i < total; i++) out.push({ id: i + 1, label: named(i, 'Aux') })
 			return out
@@ -178,21 +179,11 @@ export function resolveChannel(options: Record<string, unknown>, group: number):
  *  expression" entry and a paired `<id>_expr` textinput that appears when
  *  chosen — see resolveTrackAsync().
  *
- *  IMPORTANT: Companion serializes `isVisible` and evaluates it in the browser,
- *  so it CANNOT capture closure variables. We pass the expected group via
- *  `isVisibleData` instead. */
+ *  Visibility is a Companion expression on the Group field. */
 export function buildChannelOptions(
 	self: LV1Instance,
 	idPrefix = 'ch',
 ): Array<CompanionInputFieldDropdown | CompanionInputFieldTextInput> {
-	// NOTE: isVisible is serialized and evaluated in the browser — it CANNOT
-	// capture module-level constants like CUSTOM_EXPR. Pass the sentinel via
-	// isVisibleData.custom instead.
-	const visDropdown = (opts: Record<string, unknown>, data: { group: number }) =>
-		String(opts.group) === String(data.group)
-	const visExpr = (opts: Record<string, unknown>, data: { group: number; field: string; custom: string }) =>
-		String(opts.group) === String(data.group) && opts[data.field] === data.custom
-
 	const groups: Array<{ g: number; label: string; slug: string }> = [
 		{ g: 0, label: 'Channel', slug: 'in' },
 		{ g: 1, label: 'Group bus', slug: 'grp' },
@@ -210,8 +201,7 @@ export function buildChannelOptions(
 			label,
 			default: 1,
 			choices: withCustomOption(channelsFor(self, g)),
-			isVisible: visDropdown,
-			isVisibleData: { group: g },
+			isVisibleExpression: `$(options:group) == ${g}`,
 		})
 		out.push({
 			id: `${id}_expr`,
@@ -220,8 +210,7 @@ export function buildChannelOptions(
 			tooltip: 'Type a channel number or a variable like $(mod:my_var). 1-based.',
 			default: '',
 			useVariables: true,
-			isVisible: visExpr,
-			isVisibleData: { group: g, field: id, custom: CUSTOM_EXPR },
+			isVisibleExpression: `$(options:group) == ${g} && $(options:${id}) == '${CUSTOM_EXPR}'`,
 		})
 	}
 	// Fallback ch expression used when Group itself is __custom (we can't know
@@ -233,15 +222,12 @@ export function buildChannelOptions(
 		tooltip: 'Used when Group is set to Custom. 1-based channel index.',
 		default: '',
 		useVariables: true,
-		isVisible: (opts: Record<string, unknown>, data: { custom: string }) => opts.group === data.custom,
-		isVisibleData: { custom: CUSTOM_EXPR },
+		isVisibleExpression: `$(options:group) == '${CUSTOM_EXPR}'`,
 	})
 	return out
 }
 
-/** Group-only expression textinput. Companion evaluates isVisible in the
- *  browser without closure variables, so we pass the sentinel via
- *  isVisibleData.custom. */
+/** Group-only expression textinput, shown when Group is set to Custom. */
 export function buildGroupExprField(): CompanionInputFieldTextInput {
 	return {
 		id: 'group_expr',
@@ -250,8 +236,7 @@ export function buildGroupExprField(): CompanionInputFieldTextInput {
 		tooltip: '0=In, 1=Grp, 2=Aux, 3=LR, 4=C, 5=M, 6=Mtx, 7=Cue, 8=TB, 12=DCA',
 		default: '',
 		useVariables: true,
-		isVisible: (opts: Record<string, unknown>, data: { custom: string }) => opts.group === data.custom,
-		isVisibleData: { custom: CUSTOM_EXPR },
+		isVisibleExpression: `$(options:group) == '${CUSTOM_EXPR}'`,
 	}
 }
 
@@ -291,9 +276,7 @@ export function buildExprDropdown(
 			tooltip,
 			default: '',
 			useVariables: true,
-			isVisible: (opts: Record<string, unknown>, data: { field: string; custom: string }) =>
-				opts[data.field] === data.custom,
-			isVisibleData: { field: id, custom: CUSTOM_EXPR },
+			isVisibleExpression: `$(options:${id}) == '${CUSTOM_EXPR}'`,
 		},
 	]
 }
@@ -320,9 +303,7 @@ export function buildStateField(
 			tooltip: 'Result: on/off/toggle (or 1/0/true/false).',
 			default: '',
 			useVariables: true,
-			isVisible: (opts: Record<string, unknown>, data: { field: string; custom: string }) =>
-				opts[data.field] === data.custom,
-			isVisibleData: { field: id, custom: CUSTOM_EXPR },
+			isVisibleExpression: `$(options:${id}) == '${CUSTOM_EXPR}'`,
 		},
 	]
 }
@@ -351,13 +332,13 @@ export function buildNumberExprField(
  *  custom-expression path. Handles legacy `channel` field too. */
 export async function resolveTrackAsync(
 	options: Record<string, unknown>,
-	context: ExprContext,
+	_context: ExprContext,
 ): Promise<{ group: number; ch: number }> {
 	// Group
 	const rawGroup = options.group
 	let group: number
 	if (rawGroup === CUSTOM_EXPR) {
-		const parsed = (await context.parseVariablesInString(coerceStr(options.group_expr))).trim()
+		const parsed = String(coerceStr(options.group_expr)).trim()
 		const n = parseInt(parsed, 10)
 		group = Number.isFinite(n) ? n : 0
 	} else {
@@ -369,7 +350,7 @@ export async function resolveTrackAsync(
 
 	// When Group is __custom, channel comes from the sibling ch_expr field.
 	if (rawGroup === CUSTOM_EXPR) {
-		const parsed = (await context.parseVariablesInString(coerceStr(options.ch_expr))).trim()
+		const parsed = String(coerceStr(options.ch_expr)).trim()
 		const n = parseInt(parsed, 10)
 		return { group, ch: Number.isFinite(n) ? n - 1 : 0 }
 	}
@@ -383,7 +364,7 @@ export async function resolveTrackAsync(
 	}
 	const field = fieldByGroup[group]
 	if (field && options[field] === CUSTOM_EXPR) {
-		const parsed = (await context.parseVariablesInString(coerceStr(options[`${field}_expr`]))).trim()
+		const parsed = String(coerceStr(options[`${field}_expr`])).trim()
 		const n = parseInt(parsed, 10)
 		return { group, ch: Number.isFinite(n) ? n - 1 : 0 }
 	}
@@ -399,12 +380,12 @@ export async function resolveTrackAsync(
 export async function resolveIndexAsync(
 	options: Record<string, unknown>,
 	field: string,
-	context: ExprContext,
+	_context: ExprContext,
 	fallback = 0,
 ): Promise<number> {
 	const raw = options[field]
 	if (raw === CUSTOM_EXPR) {
-		const parsed = (await context.parseVariablesInString(coerceStr(options[`${field}_expr`]))).trim()
+		const parsed = String(coerceStr(options[`${field}_expr`])).trim()
 		const n = parseInt(parsed, 10)
 		return Number.isFinite(n) ? n - 1 : fallback
 	}
@@ -412,17 +393,16 @@ export async function resolveIndexAsync(
 	return Number.isFinite(n) ? n - 1 : fallback
 }
 
-/** Resolve a numeric textinput (e.g. dB, pan, ms). Parses variables first,
- *  then parseFloat. */
+/** Resolve a numeric textinput (e.g. dB, pan, ms); variables are already filled in. */
 export async function resolveNumberAsync(
 	options: Record<string, unknown>,
 	field: string,
-	context: ExprContext,
+	_context: ExprContext,
 	fallback = 0,
 ): Promise<number> {
 	const raw = options[field]
 	if (raw == null || raw === '') return fallback
-	const parsed = (await context.parseVariablesInString(coerceStr(raw))).trim()
+	const parsed = String(coerceStr(raw)).trim()
 	const n = parseFloat(parsed)
 	return Number.isFinite(n) ? n : fallback
 }
@@ -434,12 +414,14 @@ export async function resolveNumberAsync(
 export async function resolveStateAsync(
 	options: Record<string, unknown>,
 	field: string,
-	context: ExprContext,
+	_context: ExprContext,
 	fallback = 'toggle',
 ): Promise<string> {
 	const raw = options[field]
 	if (raw !== CUSTOM_EXPR) return coerceStr(raw)
-	const parsed = (await context.parseVariablesInString(coerceStr(options[`${field}_expr`]))).trim().toLowerCase()
+	const parsed = String(coerceStr(options[`${field}_expr`]))
+		.trim()
+		.toLowerCase()
 	if (['1', 'true', 'on', 'mute', 'solo', 'engage', 'enable', 'enabled'].includes(parsed)) return 'on'
 	if (['0', 'false', 'off', 'unmute', 'unsolo', 'disable', 'disabled'].includes(parsed)) return 'off'
 	if (['-1', 'toggle', 'flip', 'invert'].includes(parsed)) return 'toggle'

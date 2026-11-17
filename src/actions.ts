@@ -2,7 +2,7 @@
 // Reference: c:\Users\migue\.claude\projects\c--www-myfoh\memory\lv1_confirmed_command_signatures.md
 //
 // Wire convention: ALL group/channel/aux indices are 0-based on the wire.
-// The UI uses a Group dropdown + a per-group Channel dropdown (filtered via isVisible)
+// The UI uses a Group dropdown + a per-group Channel dropdown (filtered via isVisibleExpression)
 // so LR/C/M only show one entry, Auxes show real names, etc.
 //
 // Every dropdown that accepts a Group / Channel / Aux / State exposes a
@@ -15,6 +15,7 @@ import {
 	CompanionInputFieldTextInput,
 } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { lockVisibilityFields, optionText } from './definitions.js'
 import type { OscArg } from './osc.js'
 import { refreshDiscovery, getDiscoveryCache } from './discovery-cache.js'
 import {
@@ -31,6 +32,13 @@ import {
 	buildRouteDestOptions,
 	resolveRouteDest,
 } from './tracks.js'
+import { surfaceActions } from './surface-actions.js'
+
+/** Show a field only when `expr` is true (and its own visibility rule, if any, too). */
+function onlyWhen<T extends { isVisibleExpression?: string }>(field: T, expr: string): T {
+	const own = field.isVisibleExpression
+	return { ...field, isVisibleExpression: own ? `(${expr}) && (${own})` : expr }
+}
 
 type AnyOpt = CompanionInputFieldDropdown | CompanionInputFieldTextInput
 
@@ -293,67 +301,16 @@ export function UpdateActions(self: LV1Instance): void {
 					],
 				},
 				// ───── Channel-output mode: Group + per-group Channel picker ─────
-				...trackPicker.map((o) => {
-					const prevVis = (o as CompanionInputFieldDropdown).isVisible as
-						| ((opts: Record<string, unknown>, data: unknown) => boolean)
-						| undefined
-					const prevData = (o as CompanionInputFieldDropdown).isVisibleData as unknown
-					if (prevVis) {
-						return {
-							...o,
-							isVisible: (opts: Record<string, unknown>, data: { inner: unknown }) =>
-								opts.target === 'out' && prevVis(opts, data.inner),
-							isVisibleData: { inner: prevData },
-						}
-					}
-					return {
-						...o,
-						isVisible: (opts: Record<string, unknown>) => opts.target === 'out',
-					}
-				}),
+				...trackPicker.map((o) => onlyWhen(o, "$(options:target) == 'out'")),
 				// ───── Send mode: Input ch + Aux ─────
-				...inputOpts.map((o) => {
-					const prevVis = (o as CompanionInputFieldDropdown).isVisible as
-						| ((opts: Record<string, unknown>, data: unknown) => boolean)
-						| undefined
-					const prevData = (o as CompanionInputFieldDropdown).isVisibleData as unknown
-					if (prevVis) {
-						return {
-							...o,
-							isVisible: (opts: Record<string, unknown>, data: { inner: unknown }) =>
-								opts.target === 'send' && prevVis(opts, data.inner),
-							isVisibleData: { inner: prevData },
-						}
-					}
-					return {
-						...o,
-						isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
-					}
-				}),
-				...auxDestOpts.map((o) => {
-					const prevVis = (o as CompanionInputFieldDropdown).isVisible as
-						| ((opts: Record<string, unknown>, data: unknown) => boolean)
-						| undefined
-					const prevData = (o as CompanionInputFieldDropdown).isVisibleData as unknown
-					if (prevVis) {
-						return {
-							...o,
-							isVisible: (opts: Record<string, unknown>, data: { inner: unknown }) =>
-								opts.target === 'send' && prevVis(opts, data.inner),
-							isVisibleData: { inner: prevData },
-						}
-					}
-					return {
-						...o,
-						isVisible: (opts: Record<string, unknown>) => opts.target === 'send',
-					}
-				}),
+				...inputOpts.map((o) => onlyWhen(o, "$(options:target) == 'send'")),
+				...auxDestOpts.map((o) => onlyWhen(o, "$(options:target) == 'send'")),
 				// ───── Common ─────
 				dbField('db', 'Target dB', 0),
 				msField(),
 			],
 			callback: async (a, context) => {
-				const target = String(a.options.target)
+				const target = optionText(a.options.target)
 				const targetDb = await resolveNumberAsync(a.options, 'db', context, 0)
 				const durationMs = await resolveNumberAsync(a.options, 'duration', context, 1000)
 				if (target === 'out') {
@@ -543,9 +500,9 @@ export function UpdateActions(self: LV1Instance): void {
 				// need the raw dropdown value or the trimmed expression string.
 				let mode: string
 				if (a.options.mode === CUSTOM_EXPR) {
-					mode = (await context.parseVariablesInString(String(a.options.mode_expr ?? ''))).trim().toLowerCase()
+					mode = optionText(a.options.mode_expr).trim().toLowerCase()
 				} else {
-					mode = String(a.options.mode)
+					mode = optionText(a.options.mode)
 				}
 				if (mode === 'momentary' || mode === '' || mode === 'press' || mode === 'tap') {
 					self.send('/Set/UserKey', [intCh(k), { type: 'T' }])
@@ -712,7 +669,7 @@ export function UpdateActions(self: LV1Instance): void {
 					leveler: '/SetLevelerState',
 					limiter: '/SetLimiterState',
 				}
-				const addr = addrMap[String(a.options.which)]
+				const addr = addrMap[optionText(a.options.which)]
 				if (!addr) return
 				self.send(addr, [intCh(group), intCh(ch), intCh(on)])
 			},
@@ -746,7 +703,7 @@ export function UpdateActions(self: LV1Instance): void {
 					gain: '/Set/EQ/Band/Gain',
 					q: '/Set/EQ/Band/Q',
 				}
-				const addr = addrMap[String(a.options.param)]
+				const addr = addrMap[optionText(a.options.param)]
 				if (!addr) return
 				self.send(addr, [intCh(group), intCh(ch), intCh(band), { type: 'd', value: v }])
 			},
@@ -758,8 +715,8 @@ export function UpdateActions(self: LV1Instance): void {
 			options: [...trackPicker, { id: 'name', type: 'textinput', label: 'New name', default: '', useVariables: true }],
 			callback: async (a, context) => {
 				const { group, ch } = await resolveTrackAsync(a.options, context)
-				const nameRaw = String(a.options.name || '')
-				const name = (await context.parseVariablesInString(nameRaw)).trim()
+				const nameRaw = optionText(a.options.name)
+				const name = String(nameRaw).trim()
 				if (!name) return
 				self.send('/Set/TrackName', [intCh(group), intCh(ch), { type: 's', value: name }])
 				// Optimistic — our own /Set isn't echoed back, so update local state too.
@@ -817,10 +774,10 @@ export function UpdateActions(self: LV1Instance): void {
 					useVariables: true,
 				},
 			],
-			callback: async (a, context) => {
-				const addr = (await context.parseVariablesInString(String(a.options.address || ''))).trim()
+			callback: async (a, _context) => {
+				const addr = optionText(a.options.address).trim()
 				if (!addr.startsWith('/')) return
-				const argsStr = await context.parseVariablesInString(String(a.options.args || ''))
+				const argsStr = optionText(a.options.args)
 				const tokens = argsStr.trim().split(/\s+/).filter(Boolean)
 				const parsed: OscArg[] = []
 				for (const tok of tokens) {
@@ -840,5 +797,6 @@ export function UpdateActions(self: LV1Instance): void {
 		},
 	}
 
-	self.setActionDefinitions(actions)
+	// Companion Surface mode only offers what goes through the driver: MyRemote is not connected.
+	self.setActionDefinitions(lockVisibilityFields(self.config.mode === 'surface' ? surfaceActions(self) : actions))
 }

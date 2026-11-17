@@ -9,6 +9,7 @@ relay or plugin needed on the LV1 PC.
 
 ### Before you start
 
+- **Companion 5.0 or later.** (Companion 4.x keeps using module version 1.2.)
 - **eMotion LV1 must be running** on the mixer machine.
 - **Companion and the LV1 should be on the same subnet.** The LV1 announces
   itself by multicast, and multicast does not cross routers. (If they are not on
@@ -235,6 +236,77 @@ connection. The patch is re-sent on every change. This has not been checked
 against real SoundGrid I/O hardware yet (a Generic/virtual I/O reports an empty
 patch): if the variables stay empty with real I/O patched, please open an
 issue and attach the Companion log with debug messages on.
+
+## Companion Surface (optional driver)
+
+MyRemote only exposes part of the desk. **Companion Surface** is a control
+driver that runs inside eMotion LV1, like the LV1 Control or Mackie drivers.
+With it the module does everything over the network, without MyRemote:
+
+- **Faders, mute and solo** of any strip, with fades in dB. Mute follows the
+  desk: it blinks while a strip is muted by a mute group, Mute All or a Link
+- **Mute All** and the **mute groups**
+- **Flips** (sends on fader) to an FX or Monitor send for Mixer 1, Mixer 2 or the All page; eMotion stays on the page it shows
+- **Talk Back**: TALK and the Talk Back presets
+- **eMotion plugins**: any parameter, picked by plugin and parameter name, with
+  fades; slot bypass (slots 1-8) and rack In / Out
+- **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…)
+- **Ctrl / Alt / Shift** held on the eMotion computer like its keyboard (momentary
+  or toggle presets): Ctrl and Alt together work, so Ctrl + Alt + drag rotates a
+  pan knob from the touch screen. Keys go up again when Companion disconnects
+- **VU meters**: the _Strip: VU meter level_ feedback gives 0-100 for a Gauge
+  element (the flip presets come with one)
+
+Each one has a feedback that follows changes made on the desk.
+
+### Installing it on the desk computer
+
+1. In the connection settings, set **Connect through** to **Companion Surface**.
+2. On the computer that runs eMotion LV1, open a browser at
+   `http://<Companion's IP>:8000/instance/<connection label>/surface`
+   (use your Companion web port if it is not 8000) and download the installer.
+   The page works without internet access.
+3. Close eMotion LV1 and run the installer: the page has one for Windows and
+   one for macOS. Neither is signed: on Windows click **More info → Run
+   anyway**; on macOS, if the installer will not open, go to **System Settings →
+   Privacy & Security → Open Anyway**.
+4. Start eMotion LV1, open the **Controls** panel, add **Companion Surface**
+   and save. Its gear button shows the computer's addresses, the connected
+   Companion and the port / password settings.
+5. Back in the connection settings, close and reopen the dialog, pick the desk
+   in **Discovered LV1** (or leave it on **Automatic**) and save. Type its IP in
+   **eMotion LV1 computer IP (override)** only when it is not listed (routed
+   network, VPN, Companion in Docker).
+
+The driver listens on TCP port 9460. In this mode the module talks only to
+Companion Surface: MyRemote is not used and does not need to be enabled. If the
+driver on the desk is older than the one in this module, the connection status
+says so: install it again from the same page.
+
+### In eMotion itself
+
+The driver also adds a few things to eMotion. Each can be turned off in its
+gear window (Controls panel → Companion Surface → gear):
+
+- **Lock screen image per session.** While eMotion is locked, an image covers
+  the mixer area (the top bar with the lock button stays visible). Put the
+  images in `C:\ProgramData\Companion Surface\Lock Images` (macOS:
+  `/Users/Shared/Companion Surface/Lock Images`): `My Show.png` is
+  used for the session "My Show", `PSM_%.png` for every session whose name
+  starts with `PSM_` (`%` = any text; Windows does not allow `*` in file names),
+  and `default.png` for all others. PNG, JPG or BMP; Fit / Fill / Stretch; a
+  Preview button shows the image for 5 seconds.
+- On macOS Ctrl is the **Control** key and Alt the **Option** key, as in eMotion.
+- **Ctrl+Alt + drag on a pan knob changes the rotation** of a stereo strip
+  (eMotion has Ctrl + drag for the width). In sends on fader it changes the
+  rotation of the send.
+- **Hold Ctrl** on the Mixer 1 / Mixer 2 page: every stereo strip's pan knob
+  shows its width; **hold Ctrl+Alt**: its rotation. The knob is drawn like
+  eMotion's (pointer on the rotation, L-R arc around it) with the value under
+  it. In sends on fader it shows the pans of the sends.
+
+Keep **Verbose log** off unless asked for it: it writes every change made on
+the desk to a file and slows eMotion down.
 
 ## Auto-discovery
 

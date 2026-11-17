@@ -10,6 +10,20 @@ const customConfig = [
 		files: ['src/**/*.ts', 'src/**/*.js', 'src/**/*.mjs'],
 	},
 	{
+		// tsconfig.json allows .ts imports (for the tests), which turns off eslint-plugin-n's own
+		// .js -> .ts mapping: give it back.
+		settings: {
+			n: {
+				typescriptExtensionMap: [
+					['', '.js'],
+					['.ts', '.js'],
+					['.cts', '.cjs'],
+					['.mts', '.mjs'],
+				],
+			},
+		},
+	},
+	{
 		rules: {
 			'no-use-before-define': 'off',
 			'@typescript-eslint/no-use-before-define': 'off',

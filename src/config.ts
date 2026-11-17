@@ -1,8 +1,10 @@
+import os from 'node:os'
 import { SomeCompanionConfigField } from '@companion-module/base'
 import { getDiscoveryCache, refreshDiscovery } from './discovery-cache.js'
 import { multicastInterfaces } from './zdns-discover.js'
+import { SURFACE_DEFAULT_PORT } from './surface.js'
 
-export interface ModuleConfig {
+export type ModuleConfig = {
 	/** Encoded "ip:port" picked from the discovered-LV1s dropdown. Empty = use custom host/port. */
 	selected: string
 	/** Manual override IP. Used if `selected` is empty. Blank = auto-discover first LV1. */
@@ -11,9 +13,37 @@ export interface ModuleConfig {
 	port: number
 	/** Open a second, recorder-type connection to read the I/O patch (/Notify/IOConnections). */
 	readIoPatch?: boolean
+	/** 'myremote' = MyRemote protocol only (default). 'surface' = also connect to the
+	 *  Companion Surface driver running inside eMotion LV1, which unlocks its actions. */
+	mode?: 'myremote' | 'surface'
+	/** TCP port of the Companion Surface driver (its .ini on the desk computer). */
+	surfacePort?: number
+	/** Password set in the Companion Surface .ini (blank = none). */
+	surfacePassword?: string
+	/** IP of the eMotion LV1 computer in Companion Surface mode (override). Blank = the LV1 picked in
+	 *  `surfaceSelected`, else the first one found on the network. */
+	surfaceHost?: string
+	/** Companion Surface mode: IP of the LV1 picked from the discovered list. Empty = automatic. */
+	surfaceSelected?: string
 }
 
-export function GetConfigFields(): SomeCompanionConfigField[] {
+const IPV4_OR_EMPTY = '/^$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)$/'
+
+/** Install page links on every IPv4 address of this (Companion's) computer. */
+function installLinks(label: string): string {
+	const path = `/instance/${encodeURIComponent(label || 'LV1')}/surface`
+	const real: string[] = []
+	const virtual: string[] = []
+	for (const [name, list] of Object.entries(os.networkInterfaces())) {
+		// WSL / Hyper-V / VM adapters cannot be reached from the desk: list them only as a last resort.
+		const target = /vEthernet|WSL|Hyper-V|VirtualBox|VMware|docker|vboxnet/i.test(name) ? virtual : real
+		for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) target.push(a.address)
+	}
+	const ips = real.length ? real : virtual.length ? virtual : ['127.0.0.1']
+	return ips.map((ip) => `http://${ip}:8000${path}`).join('\n')
+}
+
+export function GetConfigFields(label = '', config?: Partial<ModuleConfig>): SomeCompanionConfigField[] {
 	const { entries, ageMs } = getDiscoveryCache()
 
 	// Kick off a fresh discovery in the background every time the config dialog opens.
@@ -51,10 +81,104 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		})),
 	]
 
+	// Companion Surface mode needs only the computer's IP (the driver has a fixed port): one entry per IP.
+	const surfaceChoices = [
+		{ id: '', label: entries.length ? 'Automatic: first LV1 found' : 'Automatic: none found yet' },
+	]
+	for (const e of entries) {
+		const ip = e.addresses[0]
+		if (ip && !surfaceChoices.some((c) => c.id === ip))
+			surfaceChoices.push({ id: ip, label: `${e.host || 'unknown'}  —  ${ip}` })
+	}
+	// Keep the saved pick valid while that desk is off (Companion checks values against the choices).
+	const saved = config?.surfaceSelected
+	if (saved && !surfaceChoices.some((c) => c.id === saved))
+		surfaceChoices.push({ id: saved, label: `${saved} (not found now)` })
+	const surfaceDiscovery =
+		entries.length === 0
+			? `⏳ No LV1 found yet. A scan is running in the background — close this dialog and reopen it in a few seconds.\n\n` +
+				`Scanning on: ${ifaceList}\n\n` +
+				`If the LV1 computer is on another subnet (routed network, VPN, Companion in Docker), type its IP below.`
+			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} found (cached ${ageStr}). Reopen this dialog to see a fresh scan.\n\n` +
+				`Scanning on: ${ifaceList}`
+
+	const surfaceOnly = "$(options:mode) == 'surface'"
+	const myRemoteOnly = "$(options:mode) != 'surface'"
+
 	return [
+		{
+			type: 'dropdown',
+			id: 'mode',
+			label: 'Connect through',
+			width: 12,
+			default: 'myremote',
+			choices: [
+				{ id: 'myremote', label: 'MyRemote' },
+				{ id: 'surface', label: 'Companion Surface (driver inside eMotion LV1)' },
+			],
+		},
+		{
+			type: 'static-text',
+			id: 'surface_help',
+			label: 'Install Companion Surface on the eMotion LV1 computer',
+			width: 12,
+			isVisibleExpression: surfaceOnly,
+			value:
+				'Open one of these links in a browser on the eMotion LV1 computer, download the installer and run it ' +
+				'(close eMotion first). Then start eMotion, add "Companion Surface" in the Controls panel and save.\n\n' +
+				installLinks(label) +
+				'\n\nIf your Companion web interface does not use port 8000, change it in the link. ' +
+				'In this mode the module talks only to Companion Surface; MyRemote is not used.',
+		},
+		{
+			type: 'static-text',
+			id: 'surface_discovery',
+			label: 'Discovery',
+			width: 12,
+			isVisibleExpression: surfaceOnly,
+			value: surfaceDiscovery,
+		},
+		{
+			type: 'dropdown',
+			id: 'surfaceSelected',
+			label: 'Discovered LV1',
+			width: 12,
+			default: '',
+			choices: surfaceChoices,
+			isVisibleExpression: surfaceOnly,
+		},
+		{
+			type: 'textinput',
+			id: 'surfaceHost',
+			label: 'eMotion LV1 computer IP (override)',
+			width: 6,
+			default: '',
+			tooltip: 'Optional: only when the LV1 is not in the list above. Blank = use the list.',
+			regex: IPV4_OR_EMPTY,
+			isVisibleExpression: surfaceOnly,
+		},
+		{
+			type: 'number',
+			id: 'surfacePort',
+			label: 'Companion Surface port',
+			width: 3,
+			default: SURFACE_DEFAULT_PORT,
+			min: 1,
+			max: 65535,
+			isVisibleExpression: surfaceOnly,
+		},
+		{
+			type: 'textinput',
+			id: 'surfacePassword',
+			label: 'Password (blank = none)',
+			width: 3,
+			default: '',
+			isVisibleExpression: surfaceOnly,
+		},
 		{
 			type: 'static-text',
 			id: 'discovery_status',
+			isVisibleExpression: myRemoteOnly,
 			label: 'Discovery',
 			width: 12,
 			value: discoveryStatus,
@@ -62,6 +186,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'dropdown',
 			id: 'selected',
+			isVisibleExpression: myRemoteOnly,
 			label: 'Discovered LV1',
 			width: 12,
 			default: '',
@@ -70,6 +195,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'static-text',
 			id: 'override_hint',
+			isVisibleExpression: myRemoteOnly,
 			label: 'Custom address (override)',
 			width: 12,
 			value:
@@ -78,17 +204,19 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'textinput',
 			id: 'host',
+			isVisibleExpression: myRemoteOnly,
 			label: 'LV1 IP (override)',
 			width: 6,
 			default: '',
 			// Accept empty (= use auto-discovery) OR a valid dotted-quad IPv4. We can't use
 			// Regex.IP here because it rejects the empty string, which would lock the Save
 			// button whenever the user doesn't want a manual override.
-			regex: '/^$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)$/',
+			regex: IPV4_OR_EMPTY,
 		},
 		{
 			type: 'number',
 			id: 'port',
+			isVisibleExpression: myRemoteOnly,
 			label: 'LV1 port (0 = auto)',
 			width: 6,
 			default: 0,
@@ -98,6 +226,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'checkbox',
 			id: 'readIoPatch',
+			isVisibleExpression: myRemoteOnly,
 			label: 'Read I/O patch (experimental, eMotion LV1 v17+)',
 			tooltip:
 				'Opens a second connection that registers like Waves Tracks Live — the only client type the LV1 sends its I/O patch to. ' +

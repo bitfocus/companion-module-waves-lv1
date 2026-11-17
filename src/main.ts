@@ -8,7 +8,16 @@
 // feedbacks can render without re-querying the LV1. The LV1 broadcasts every change
 // from any other client too, so we stay in sync automatically.
 
-import { InstanceBase, runEntrypoint, InstanceStatus, SomeCompanionConfigField } from '@companion-module/base'
+import {
+	InstanceBase,
+	InstanceStatus,
+	type CompanionFeedbackSchema,
+	type CompanionHTTPRequest,
+	type CompanionHTTPResponse,
+	type CompanionOptionValues,
+	type CompanionVariableValues,
+	type SomeCompanionConfigField,
+} from '@companion-module/base'
 import { GetConfigFields, type ModuleConfig } from './config.js'
 import { UpdateActions } from './actions.js'
 import { UpdateFeedbacks } from './feedbacks.js'
@@ -24,6 +33,27 @@ import { trackSlug } from './tracks.js'
 import { AuxMap, parseAuxTracks } from './aux-map.js'
 import { MASK_GROUPS, decodeRouteMask, isTalkBackDest, routeKey } from './routing.js'
 import { parseIOConnections, rowLabel, rowTrack } from './io-connections.js'
+import { SurfaceClient, controlKey, type ControlAddress, type ControlUpdate } from './surface-client.js'
+import { SURFACE_DEFAULT_PORT, SURFACE_DRIVER_VERSION, compareVersions, surfaceInstallPage } from './surface.js'
+import {
+	SurfaceModel,
+	MUTE_ALL,
+	MUTE_GROUPS,
+	RACK_SLOTS,
+	RACK_TYPES,
+	STRIP_TYPES,
+	SURFACE_TRACK_TYPES,
+	displayNumber,
+	muteGroupAddress,
+	strip,
+	type PluginParam,
+} from './surface-model.js'
+import type { FadeCurve } from './surface-ui.js'
+import { surfaceVariableValues } from './surface-presets.js'
+import type { ControlProps, EmotionSignal, InterMapMessage, MeterUpdate, RealUpdate } from './surface-client.js'
+
+/** Output meters of a strip: meter 16 (left / mono) and 17 (right). */
+const METER_OUT_MASK = (1 << 16) | (1 << 17)
 
 interface ChannelState {
 	muted: boolean
@@ -65,7 +95,16 @@ interface SendState {
 	gain: number
 }
 
-export class LV1Instance extends InstanceBase<ModuleConfig> {
+/** What the module gives Companion: the config, and actions / feedbacks / variables by id. */
+export type ModuleSchema = {
+	config: ModuleConfig
+	secrets: undefined
+	actions: Record<string, { options: CompanionOptionValues }>
+	feedbacks: Record<string, CompanionFeedbackSchema<CompanionOptionValues>>
+	variables: CompanionVariableValues
+}
+
+export class LV1Instance extends InstanceBase<ModuleSchema> {
 	public config!: ModuleConfig
 	public osc: OscTcpClient | null = null
 
@@ -133,6 +172,40 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	 *  so its multicast socket does not outlive the connection. */
 	private connectScan: DiscoverHandle | null = null
 
+	/** Companion Surface driver connection (config mode 'surface'). */
+	public surface: SurfaceClient | null = null
+	/** Last value of every eMotion control the driver reported, key = controlKey(). */
+	public surfaceControls = new Map<string, ControlUpdate>()
+	/** Controls already requested with getx on the current driver connection. */
+	private surfaceAsked = new Set<string>()
+	/** Why the driver side is not usable, shown as the connection status. null = fine. */
+	private surfaceProblem: string | null = null
+	private surfaceFeedbackTimer: NodeJS.Timeout | null = null
+	/** The MyRemote connection is registered. */
+	private myRemoteOk = false
+	/** Desk state learned from the driver: track names, flips, Talk Back preset. */
+	public surfaceModel = new SurfaceModel()
+	/** eMotion shortcuts registered on our surface this connection: `${fn}.${sel}.${tt}.${track}` → slot. */
+	private surfaceKeys = new Map<string, number>()
+	private nextSurfaceSlot = 1
+	/** eMotion functions pressed (Press / Toggle) and not released yet, by function key. */
+	private surfaceHeld = new Set<string>()
+	/** Modifier keys held on the eMotion computer through the driver (key ctrl|alt|shift). */
+	private surfaceKeysDown = new Set<string>()
+	private surfaceDefsTimer: NodeJS.Timeout | null = null
+	/** Running fades, key = the control being faded. */
+	private surfaceFades = new Map<string, NodeJS.Timeout>()
+	/** Strips whose meters a feedback shows, key `${tt}.${track}` → number of feedbacks. */
+	private surfaceMeterRefs = new Map<string, number>()
+	private surfaceMeterTimer: NodeJS.Timeout | null = null
+	/** The desk's strips, racks and groups were read on this connection. */
+	private surfaceProbed = false
+	private surfaceRereadTimer: NodeJS.Timeout | null = null
+	/** Name re-reads after a connect (eMotion may still be loading its session then) and every minute. */
+	private surfaceNameTimers: NodeJS.Timeout[] = []
+	/** Plugin codes whose parameter catalogue was requested on this connection. */
+	private surfacePluginsAsked = new Set<string>()
+
 	/** Mixer config discovered from the LV1 itself. Fully populated from /Notify/Layers
 	 *  (factory) + /Aux/Tracks. No user config needed. */
 	public detected: {
@@ -172,7 +245,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.updateFeedbacks()
 		this.updatePresets()
 		this.updateVariables()
-		await this.connectIfReady()
+		this.connectInBackground()
 	}
 
 	async destroy(): Promise<void> {
@@ -188,6 +261,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.osc = null
 		}
 		this.stopIoPatchClient()
+		this.stopSurfaceClient()
 		if (this.channelsWatchdog) clearTimeout(this.channelsWatchdog)
 		this.channelsWatchdog = null
 		this.stopConnectScan()
@@ -204,9 +278,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.config.selected !== config.selected ||
 			this.config.host !== config.host ||
 			this.config.port !== config.port ||
-			!!this.config.readIoPatch !== !!config.readIoPatch
+			!!this.config.readIoPatch !== !!config.readIoPatch ||
+			(this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote') ||
+			this.config.surfacePort !== config.surfacePort ||
+			this.config.surfacePassword !== config.surfacePassword ||
+			this.config.surfaceHost !== config.surfaceHost ||
+			(this.config.surfaceSelected ?? '') !== (config.surfaceSelected ?? '')
+		const modeChanged = (this.config.mode ?? 'myremote') !== (config.mode ?? 'myremote')
 		this.config = config
 
+		// The other mode's presets would point at actions that no longer exist.
+		if (modeChanged) this.setPresetDefinitions([], {})
 		this.updateActions()
 		this.updateFeedbacks()
 		this.updatePresets()
@@ -218,6 +300,10 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				this.osc = null
 			}
 			this.stopIoPatchClient()
+			this.stopSurfaceClient()
+			this.surfaceControls.clear()
+			this.surfaceModel.reset()
+			this.myRemoteOk = false
 			// L3: clear all mixer-state derived from the previous host so feedbacks
 			// don't briefly render the old mixer's values during the cross-over, and
 			// a carried-over failure count doesn't trigger a spurious re-discovery.
@@ -254,15 +340,23 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.updateFeedbacks()
 			this.updatePresets()
 			this.updateVariables()
-			this.checkFeedbacks()
+			this.checkAllFeedbacks()
 			cancelDiscovery()
 			this.stopConnectScan()
-			await this.connectIfReady()
+			this.connectInBackground()
 		}
 	}
 
+	/** Connect without holding up init / configUpdated: a MyRemote connect may first run a
+	 *  discovery scan of several seconds, longer than Companion waits for those calls. */
+	private connectInBackground(): void {
+		this.connectIfReady().catch((e: unknown) =>
+			this.log('error', `Connect failed: ${e instanceof Error ? e.message : String(e)}`),
+		)
+	}
+
 	getConfigFields(): SomeCompanionConfigField[] {
-		return GetConfigFields()
+		return GetConfigFields(this.label, this.config)
 	}
 
 	updateActions(): void {
@@ -283,9 +377,21 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	private async connectIfReady(): Promise<void> {
 		let host = ''
 		let port = 0
+		const surfaceMode = this.config.mode === 'surface'
+
+		// Companion Surface mode only needs the desk computer's IP (the driver has a fixed port):
+		// the override field, else the LV1 picked from its list, else the first one found below.
+		if (surfaceMode) {
+			const ip = this.config.surfaceHost?.trim() || this.config.surfaceSelected || ''
+			if (ip) {
+				this.lastHost = ip
+				this.startSurfaceClient(ip)
+				return
+			}
+		}
 
 		// Priority 1: user picked something from the "Discovered LV1" dropdown.
-		if (this.config.selected) {
+		if (this.config.selected && !surfaceMode) {
 			const cached = findInCache(this.config.selected)
 			if (cached) {
 				host = cached.addresses[0] || cached.host || ''
@@ -304,11 +410,13 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		}
 
 		// Priority 2: manual override fields. The host may force a different IP than the dropdown.
-		if (this.config.host?.trim()) host = this.config.host.trim()
-		if (this.config.port > 0) port = this.config.port
+		if (!surfaceMode) {
+			if (this.config.host?.trim()) host = this.config.host.trim()
+			if (this.config.port > 0) port = this.config.port
+		}
 
 		// Priority 3: if we still have no host or no port, try a one-shot discovery.
-		if (!host || !port) {
+		if (!host || (!port && !surfaceMode)) {
 			this.updateStatus(InstanceStatus.Connecting, 'Discovering LV1…')
 			this.log('info', `Running zDNS discovery (host filter: ${host || 'none'})`)
 			const scan = discover({
@@ -349,6 +457,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			this.log('info', `Discovered ${chosen.host} at ${host}:${port}`)
 		}
 
+		if (surfaceMode) {
+			// Standalone: everything goes through the driver, MyRemote is never opened.
+			if (!host) {
+				this.updateStatus(InstanceStatus.BadConfig, 'No LV1 address available after discovery')
+				return
+			}
+			this.lastHost = host
+			this.startSurfaceClient(host)
+			return
+		}
+
 		if (!host || !port) {
 			this.updateStatus(InstanceStatus.BadConfig, 'No host or port available after discovery')
 			return
@@ -366,6 +485,725 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		this.bindOscEvents(this.osc)
 		this.osc.connect()
 		if (this.config.readIoPatch) this.startIoPatchClient(host, port)
+	}
+
+	// ─── Companion Surface driver ─────────────────────────────────────────
+
+	/** The driver runs inside eMotion, so it lives on the same computer as the MyRemote server. */
+	private startSurfaceClient(host: string): void {
+		this.stopSurfaceClient()
+		const port = this.config.surfacePort || SURFACE_DEFAULT_PORT
+		const s = new SurfaceClient({ host, port, password: this.config.surfacePassword ?? '' })
+		const rejected = 'Companion Surface rejected the password'
+		let failing = false
+		this.surfaceProblem = `Companion Surface not reachable on ${host}:${port} — is it installed and added in eMotion's Controls panel?`
+		this.updateStatus(InstanceStatus.Connecting, `Connecting to Companion Surface on ${host}:${port}`)
+		s.on('ready', (version: string | null) => {
+			failing = false
+			this.surfaceAsked.clear()
+			this.surfaceModel.reset()
+			this.surfaceKeys.clear()
+			this.nextSurfaceSlot = 1
+			this.surfaceHeld.clear()
+			this.surfaceKeysDown.clear() // the driver lets go of the keys of a client that disconnects
+			this.checkFeedbacks('surfaceFunctionHeld', 'surfaceKeyHeld')
+			// Flip state comes from eMotion's InterMapper messages; names and counts from the tracks.
+			s.write('sub im 1')
+			s.write('sub meters 1')
+			for (const key of this.surfaceMeterRefs.keys()) {
+				const [tt, track] = key.split('.').map(Number)
+				s.registerMeters(tt, track, METER_OUT_MASK)
+			}
+			this.surfacePluginsAsked.clear()
+			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+			// Strips, racks and groups are read once the names say which tracks exist.
+			this.surfaceProbed = false
+			this.surfaceStartNameRefresh(s)
+			this.surfaceProblem =
+				version && compareVersions(version, SURFACE_DRIVER_VERSION) < 0
+					? `Companion Surface ${version} on the desk is older than ${SURFACE_DRIVER_VERSION} — reinstall it from the install page`
+					: null
+			this.log('info', `Companion Surface ${version ?? '?'} connected on ${host}:${port}`)
+			this.reportStatus()
+			// Feedback callbacks request the values they do not know yet.
+			this.checkAllFeedbacks()
+		})
+		s.on('control', (c: ControlUpdate) => {
+			this.surfaceControls.set(controlKey(c), c)
+			this.surfaceWatchImplicitMutes(c)
+			this.surfaceLearn(c)
+			const kind = this.surfaceModel.applyControl(c)
+			if (kind === 'names') this.scheduleSurfaceDefinitions()
+			else if (kind === 'tb') this.pushSurfaceVariables()
+			this.scheduleSurfaceFeedbacks()
+		})
+		s.on('real', (r: RealUpdate) => {
+			if (r.mode !== 3) return
+			const key = controlKey(r)
+			if (r.group === 7 && r.cid === 0) {
+				this.surfaceModel.real.set(key, r.value)
+			} else {
+				// On / off controls are read in real-world mode (raw reads can be wrong after plugin-slot reads).
+				const c: ControlUpdate = { ...r }
+				this.surfaceControls.set(key, c)
+				if (this.surfaceModel.applyControl(c) === 'tb') this.pushSurfaceVariables()
+				this.surfaceWatchImplicitMutes(c)
+			}
+			this.scheduleSurfaceFeedbacks()
+			this.scheduleSurfaceVariables()
+		})
+		s.on('props', (p: ControlProps) => {
+			const slot = this.surfaceModel.slots.get(`${p.tt}.${p.track}.${p.secType}`)
+			if (slot && this.surfaceModel.applyProps(slot.code, slot.name, p)) this.scheduleSurfaceDefinitions()
+		})
+		s.on('meter', (m: MeterUpdate) => {
+			if (m.meter < 16 || m.meter > 31) return
+			const key = `${m.tt}.${m.track}`
+			const cur = this.surfaceModel.meters.get(key) ?? { legs: [], clip: false }
+			cur.legs[m.meter - 16] = m.value
+			cur.clip = m.clip
+			this.surfaceModel.meters.set(key, cur)
+			// Meters redraw at most ~15 times a second.
+			if (!this.surfaceMeterTimer)
+				this.surfaceMeterTimer = setTimeout(() => {
+					this.surfaceMeterTimer = null
+					this.checkFeedbacks('surfaceMeter')
+				}, 66)
+		})
+		s.on('signal', (sig: EmotionSignal) => {
+			if (sig.name === 'muteGroupStateChanged') this.surfaceScheduleMuteReread()
+			if (sig.name === 'currentSessionNameChanged') {
+				// Loading a session clears the shortcuts registered on our surface: register again.
+				this.surfaceKeys.clear()
+				this.nextSurfaceSlot = 1
+				this.surfaceHeld.clear()
+				this.checkFeedbacks('surfaceFunctionHeld')
+				this.surfaceScheduleReread()
+			}
+			if (!this.surfaceModel.applySignal(sig.name, sig.args)) return
+			this.scheduleSurfaceFeedbacks()
+			this.scheduleSurfaceVariables()
+		})
+		s.on('intermap', (m: InterMapMessage) => {
+			if (!this.surfaceModel.applyInterMap(m)) return
+			this.checkFeedbacks('surfaceFlip')
+			this.pushSurfaceVariables()
+		})
+		s.on('authFailed', () => {
+			if (this.surfaceProblem === rejected) return
+			this.surfaceProblem = rejected
+			this.log('warn', rejected)
+			this.reportStatus()
+		})
+		s.on('driverError', (msg: string) => this.log('warn', `Companion Surface: ${msg}`))
+		s.on('error', (err: Error) => {
+			// Warn once per outage; the retries after that only go to debug.
+			this.log(failing ? 'debug' : 'warn', `Companion Surface ${host}:${port}: ${err.message} — retrying`)
+			if (!failing) this.reportStatus()
+			failing = true
+		})
+		s.on('close', () => {
+			this.surfaceStopNameRefresh()
+			this.surfaceProblem = `Companion Surface on ${host}:${port} disconnected — retrying`
+			this.reportStatus()
+		})
+		this.surface = s
+		s.connect()
+	}
+
+	/**
+	 * A session was loaded (also after a mixer configuration change, which keeps the driver
+	 * connected): read which tracks exist again, then the strips, racks and groups.
+	 */
+	/**
+	 * When eMotion has just started, the driver answers before the session is loaded: names read
+	 * then are empty or default. Read them again a few times after a connect, then every minute
+	 * (about 250 quick reads; definitions are rebuilt only when a name really changed).
+	 */
+	private surfaceStartNameRefresh(s: SurfaceClient): void {
+		this.surfaceStopNameRefresh()
+		const read = () => {
+			if (s.isReady()) for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+		}
+		for (const ms of [5000, 15000, 30000]) this.surfaceNameTimers.push(setTimeout(read, ms))
+		this.surfaceNameTimers.push(setInterval(read, 60000))
+	}
+
+	private surfaceStopNameRefresh(): void {
+		for (const t of this.surfaceNameTimers) clearTimeout(t)
+		this.surfaceNameTimers = []
+	}
+
+	private surfaceScheduleReread(): void {
+		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
+		this.surfaceRereadTimer = setTimeout(() => {
+			this.surfaceRereadTimer = null
+			const s = this.surface
+			if (!s?.isReady()) return
+			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+			this.surfaceRereadTimer = setTimeout(() => {
+				this.surfaceRereadTimer = null
+				this.surfaceProbed = false
+				this.scheduleSurfaceDefinitions()
+			}, 2000)
+		}, 3000)
+	}
+
+	/** Track names / counts changed: rebuild the dropdowns, presets and variables once. */
+	private scheduleSurfaceDefinitions(): void {
+		if (this.surfaceDefsTimer) return
+		this.surfaceDefsTimer = setTimeout(() => {
+			this.surfaceDefsTimer = null
+			if (!this.surfaceProbed && this.surface?.isReady()) {
+				this.surfaceProbed = true
+				this.surfaceProbeDesk(this.surface)
+			}
+			this.updateActions()
+			this.updateFeedbacks()
+			this.updatePresets()
+			this.updateVariables()
+			this.checkAllFeedbacks()
+		}, 400)
+	}
+
+	private pushSurfaceVariables(): void {
+		this.setVariableValues(surfaceVariableValues(this))
+	}
+
+	private surfaceVariablesTimer: NodeJS.Timeout | null = null
+	private scheduleSurfaceVariables(): void {
+		if (this.surfaceVariablesTimer) return
+		this.surfaceVariablesTimer = setTimeout(() => {
+			this.surfaceVariablesTimer = null
+			this.pushSurfaceVariables()
+		}, 100)
+	}
+
+	/** After the names: faders (dB), mutes, solos and rack slots of the tracks that exist, mute groups, Mute All. */
+	private surfaceProbeDesk(s: SurfaceClient): void {
+		for (const t of SURFACE_TRACK_TYPES) {
+			if (!STRIP_TYPES.includes(t.tt)) continue
+			for (const tr of this.surfaceModel.list(t.tt)) {
+				const i = tr.track
+				s.getReal(strip.fader(t.tt, i))
+				s.getReal(strip.mute(t.tt, i))
+				s.getReal(strip.solo(t.tt, i))
+				if (!RACK_TYPES.includes(t.tt)) continue
+				for (let slot = 0; slot < RACK_SLOTS; slot++) {
+					s.getx(strip.slotName(t.tt, i, slot))
+					s.getx(strip.slotCode(t.tt, i, slot))
+				}
+			}
+		}
+		for (let g = 0; g < MUTE_GROUPS; g++) s.getReal(muteGroupAddress(g))
+		s.getReal(MUTE_ALL)
+	}
+
+	/** Strip mute: 0 off, 1 muted by its own button, 2 muted by Mute All / a mute group / a DCA. */
+	surfaceMuteState(tt: number, track: number): number | null {
+		const v = this.surfaceValue(strip.mute(tt, track))
+		return v == null ? null : Math.round(v)
+	}
+
+	/**
+	 * The desk's mute button cycle: muted by a group (2) → unmuted (0) → muted (1) → back to
+	 * following the group (2). Writing 2 with nothing muting the strip leaves it unmuted, so
+	 * without groups this is a plain on / off.
+	 */
+	surfaceMuteCycle(tt: number, track: number): void {
+		const cur = this.surfaceMuteState(tt, track) ?? 0
+		this.surfaceSet(strip.mute(tt, track), cur === 2 ? 0 : cur === 0 ? 1 : 2)
+		if (cur === 1) setTimeout(() => this.surface?.getReal(strip.mute(tt, track)), 150)
+	}
+
+	/** Mute All, mute groups and DCA / Link mutes change other strips' mute without telling them. */
+	private surfaceWatchImplicitMutes(c: ControlUpdate): void {
+		if (c.group !== 7 || c.cid !== 11) return
+		if (c.tt === 16 || c.tt === 13 || c.tt === 12) this.surfaceScheduleMuteReread()
+	}
+
+	private surfaceMuteRereadTimer: NodeJS.Timeout | null = null
+	private surfaceScheduleMuteReread(): void {
+		if (this.surfaceMuteRereadTimer) return
+		this.surfaceMuteRereadTimer = setTimeout(() => {
+			this.surfaceMuteRereadTimer = null
+			const s = this.surface
+			if (!s?.isReady()) return
+			for (const t of SURFACE_TRACK_TYPES) {
+				if (!STRIP_TYPES.includes(t.tt) || t.tt === 12) continue
+				for (const tr of this.surfaceModel.list(t.tt)) s.getReal(strip.mute(t.tt, tr.track))
+			}
+		}, 200)
+	}
+
+	/** Blink phase for strips muted by a group (value 2), like the desk's mute buttons. */
+	public surfaceBlinkOn = true
+	private surfaceBlinkTimer: NodeJS.Timeout | null = null
+	private surfaceUpdateBlink(): void {
+		const anyImplicit = [...this.surfaceControls.entries()].some(
+			([k, c]) => k.endsWith('.7.-1.-1.11') && Math.round(c.value) === 2,
+		)
+		if (anyImplicit && !this.surfaceBlinkTimer) {
+			this.surfaceBlinkTimer = setInterval(() => {
+				this.surfaceBlinkOn = !this.surfaceBlinkOn
+				this.checkFeedbacks('surfaceMuted')
+			}, 500)
+		} else if (!anyImplicit && this.surfaceBlinkTimer) {
+			clearInterval(this.surfaceBlinkTimer)
+			this.surfaceBlinkTimer = null
+			this.surfaceBlinkOn = true
+		}
+	}
+
+	/** Facts learned from control reports: fader dB from its display, plugins in slots, parameter scales. */
+	private surfaceLearn(c: ControlUpdate): void {
+		const s = this.surface
+		const model = this.surfaceModel
+		// Fader display (cid 1) carries the dB text of the fader written on cid 0.
+		if (c.group === 7 && c.cid === 1 && c.secType === -1) {
+			const db = displayNumber(c.text)
+			if (db != null) model.real.set(controlKey(strip.fader(c.tt, c.track)), db)
+			this.scheduleSurfaceVariables()
+			return
+		}
+		if (c.group !== 4) return
+		if (model.applySlot(c)) {
+			const slot = model.slots.get(`${c.tt}.${c.track}.${c.secType}`)
+			// First time a plugin type shows up: read its parameter names and ranges from this slot.
+			if (s && slot?.code && slot.name && !this.surfacePluginsAsked.has(slot.code)) {
+				this.surfacePluginsAsked.add(slot.code)
+				for (let i = 0; i < 128; i++) {
+					s.props(strip.param(c.tt, c.track, c.secType, i))
+					s.getx(strip.param(c.tt, c.track, c.secType, i))
+				}
+			}
+			this.scheduleSurfaceDefinitions()
+			return
+		}
+		// A parameter value with its display text: learn whether the parameter is linear or log.
+		if (c.cid === 11 && c.secIdx >= 0) {
+			const code = model.slotCode(c.tt, c.track, c.secType)
+			const p = model.plugins.get(code)?.params.get(c.secIdx)
+			if (p && p.kind === 'continuous' && !p.scale) {
+				const shown = displayNumber(c.text)
+				if (shown != null && c.value > 20 && c.value < 980) {
+					const lin = p.min + (c.value / 1000) * (p.max - p.min)
+					const log = p.min > 0 ? p.min * Math.pow(p.max / p.min, c.value / 1000) : NaN
+					p.scale = Number.isFinite(log) && Math.abs(log - shown) < Math.abs(lin - shown) ? 'log' : 'linear'
+				}
+			}
+			this.scheduleSurfaceFeedbacks()
+		}
+	}
+
+	/** Strip each meter feedback shows, key = feedback id. */
+	private surfaceMeterFeedbacks = new Map<string, string>()
+
+	/** A meter feedback runs: (re)bind it to its strip, registering the strip's meters when new. */
+	surfaceMeterBind(feedbackId: string, tt: number, track: number): void {
+		const key = `${tt}.${track}`
+		const had = this.surfaceMeterFeedbacks.get(feedbackId)
+		if (had === key) return
+		if (had) {
+			const [ptt, ptrack] = had.split('.').map(Number)
+			this.surfaceMeterRelease(ptt, ptrack)
+		}
+		this.surfaceMeterFeedbacks.set(feedbackId, key)
+		this.surfaceMeterWant(tt, track)
+	}
+
+	/** A meter feedback was removed from its button. */
+	surfaceMeterUnbind(feedbackId: string): void {
+		const had = this.surfaceMeterFeedbacks.get(feedbackId)
+		if (!had) return
+		this.surfaceMeterFeedbacks.delete(feedbackId)
+		const [tt, track] = had.split('.').map(Number)
+		this.surfaceMeterRelease(tt, track)
+	}
+
+	/** A feedback shows this strip's meter: register it with eMotion (once per strip). */
+	surfaceMeterWant(tt: number, track: number): void {
+		const key = `${tt}.${track}`
+		const n = (this.surfaceMeterRefs.get(key) ?? 0) + 1
+		this.surfaceMeterRefs.set(key, n)
+		if (n === 1) this.surface?.registerMeters(tt, track, METER_OUT_MASK)
+	}
+
+	surfaceMeterRelease(tt: number, track: number): void {
+		const key = `${tt}.${track}`
+		const n = (this.surfaceMeterRefs.get(key) ?? 0) - 1
+		if (n > 0) {
+			this.surfaceMeterRefs.set(key, n)
+			return
+		}
+		this.surfaceMeterRefs.delete(key)
+		this.surface?.registerMeters(tt, track, 0)
+		this.surfaceModel.meters.delete(key)
+	}
+
+	/** Fader in dB, from what the desk reported. */
+	surfaceFaderDb(tt: number, track: number): number | null {
+		const v = this.surfaceModel.real.get(controlKey(strip.fader(tt, track)))
+		if (v != null) return v
+		this.surface?.getReal(strip.fader(tt, track))
+		return null
+	}
+
+	surfaceSetFader(tt: number, track: number, db: number, fade: { ms: number; curve: FadeCurve } | null): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const addr = strip.fader(tt, track)
+		const key = controlKey(addr)
+		const apply = (v: number) => {
+			s.setReal(addr, Math.round(v * 10) / 10)
+			this.surfaceModel.real.set(key, v)
+		}
+		const from = this.surfaceModel.real.get(key)
+		if (!fade || from == null) {
+			this.surfaceStopFade(key)
+			apply(db)
+			this.scheduleSurfaceVariables()
+			return
+		}
+		// Fading up from −∞: start where the fader starts to be audible.
+		this.surfaceFade(key, Math.max(from, -80), db, fade, apply)
+	}
+
+	/** A plugin parameter's display text (as eMotion shows it), or null when not known yet. */
+	surfacePluginText(tt: number, track: number, slot: number, index: number): string | null {
+		const addr = strip.param(tt, track, slot, index)
+		const c = this.surfaceControls.get(controlKey(addr))
+		if (c) return c.text
+		if (this.surface?.isReady() && !this.surfaceAsked.has(controlKey(addr))) {
+			this.surfaceAsked.add(controlKey(addr))
+			this.surface.getx(addr)
+		}
+		return null
+	}
+
+	private toRaw(p: PluginParam, v: number): number {
+		if (p.scale === 'log' && p.min > 0 && v > 0) return (1000 * Math.log(v / p.min)) / Math.log(p.max / p.min)
+		return ((v - p.min) / (p.max - p.min || 1)) * 1000
+	}
+
+	private fromRaw(p: PluginParam, raw: number): number {
+		if (p.scale === 'log' && p.min > 0) return p.min * Math.pow(p.max / p.min, raw / 1000)
+		return p.min + (raw / 1000) * (p.max - p.min)
+	}
+
+	/** Change a plugin parameter: set / inc / dec in its units (optionally fading), toggle, next, prev. */
+	async surfaceChangePluginParam(
+		tt: number,
+		track: number,
+		slot: number,
+		p: PluginParam,
+		mode: string,
+		value: number,
+		fade: { ms: number; curve: FadeCurve } | null,
+	): Promise<void> {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const addr = strip.param(tt, track, slot, p.index)
+		const key = controlKey(addr)
+		let raw = this.surfaceControls.get(key)?.value
+		if (raw == null) {
+			s.getx(addr)
+			await new Promise((r) => setTimeout(r, 200))
+			raw = this.surfaceControls.get(key)?.value
+		}
+		const write = (r: number) => {
+			s.setx(addr, r)
+			const prev = this.surfaceControls.get(key)
+			this.surfaceControls.set(key, { ...addr, value: r, text: prev?.text ?? '' })
+		}
+		if (p.kind === 'state' || mode === 'toggle' || mode === 'next' || mode === 'prev') {
+			const cur = Math.round(raw ?? 0)
+			let next = cur
+			if (mode === 'toggle') next = cur ? 0 : 1
+			else if (mode === 'next') next = cur + 1
+			else if (mode === 'prev') next = Math.max(0, cur - 1)
+			else if (mode === 'inc') next = cur + Math.round(value)
+			else if (mode === 'dec') next = Math.max(0, cur - Math.round(value))
+			else next = Math.max(0, Math.round(value))
+			this.surfaceStopFade(key)
+			write(next)
+			if (mode === 'next') {
+				// Past the last state eMotion keeps the old value: wrap to the first one.
+				setTimeout(() => {
+					if (Math.round(this.surfaceControls.get(key)?.value ?? next) === cur) write(0)
+				}, 300)
+				s.getx(addr)
+			}
+			return
+		}
+		const current = raw != null ? this.fromRaw(p, raw) : p.min
+		const lo = Math.min(p.min, p.max)
+		const hi = Math.max(p.min, p.max)
+		const target = Math.max(
+			lo,
+			Math.min(hi, mode === 'inc' ? current + value : mode === 'dec' ? current - value : value),
+		)
+		const targetRaw = Math.max(0, Math.min(1000, this.toRaw(p, target)))
+		if (!fade || raw == null) {
+			this.surfaceStopFade(key)
+			write(targetRaw)
+			return
+		}
+		// Fade on the desk's own 0-1000 scale: even steps on log controls (frequency) too.
+		this.surfaceFade(key, raw, targetRaw, fade, write)
+	}
+
+	private surfaceStopFade(key: string): void {
+		const t = this.surfaceFades.get(key)
+		if (t) clearInterval(t)
+		this.surfaceFades.delete(key)
+	}
+
+	/** Steps a value from → to over the fade time (about 25 steps per second). */
+	private surfaceFade(
+		key: string,
+		from: number,
+		to: number,
+		fade: { ms: number; curve: FadeCurve },
+		apply: (v: number) => void,
+	): void {
+		this.surfaceStopFade(key)
+		const start = Date.now()
+		const ease = (x: number) =>
+			fade.curve === 'ease' ? x * x * (3 - 2 * x) : fade.curve === 'easeOut' ? 1 - (1 - x) * (1 - x) : x
+		const step = () => {
+			const x = Math.min(1, (Date.now() - start) / fade.ms)
+			apply(from + (to - from) * ease(x))
+			if (x >= 1) {
+				this.surfaceStopFade(key)
+				this.scheduleSurfaceVariables()
+			}
+		}
+		step()
+		this.surfaceFades.set(key, setInterval(step, 40))
+	}
+
+	/**
+	 * Runs an eMotion shortcut function (WCUserKeyHandler action code) the way a surface key does:
+	 * the first time, register it on our surface (its own slot), then press and release it.
+	 */
+	/**
+	 * Flip mixer views (0 = Mixer 1, 1 = Mixer 2) to an aux or back. eMotion keeps the page it shows
+	 * (its Flip Sends user key would switch to the mixer page). The aux is eMotion's combined index:
+	 * FX first, then Monitors.
+	 */
+	surfaceFlipViews(views: number[], tt: number, track: number, on: boolean): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const fxCount = this.surfaceModel.list(2).length
+		const aux = tt === 2 ? track : tt === 25 ? fxCount + track : -1
+		if (aux < 0) return
+		for (const view of views) {
+			// Turning off only where that aux is the one flipped (msg 4 with on=0 un-flips the view).
+			if (!on && !this.surfaceModel.isFlipped(view, tt, track)) continue
+			s.write(`flip ${view} ${aux} ${on ? 1 : 0}`)
+		}
+	}
+
+	/**
+	 * Hold / release / toggle a modifier key on the eMotion computer (driver 0.1.21+). They are real
+	 * key presses there, so Ctrl and Alt can be held together (eMotion's Alt / Ctrl functions cannot)
+	 * and Ctrl + Alt + drag rotates a pan knob from the touch screen.
+	 */
+	surfaceSetKey(key: 'ctrl' | 'alt' | 'shift', mode: 'down' | 'up' | 'toggle'): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const down = mode === 'toggle' ? !this.surfaceKeysDown.has(key) : mode === 'down'
+		if (down) this.surfaceKeysDown.add(key)
+		else this.surfaceKeysDown.delete(key)
+		s.write(`key ${key} ${down ? 1 : 0}`)
+		this.checkFeedbacks('surfaceKeyHeld')
+	}
+
+	surfaceKeyHeld(key: string): boolean {
+		return this.surfaceKeysDown.has(key)
+	}
+
+	/** True while this module holds an eMotion function down (Press or Toggle, not released yet). */
+	surfaceFunctionHeld(fn: number): boolean {
+		for (const key of this.surfaceHeld) if (key.startsWith(`${fn}.`)) return true
+		return false
+	}
+
+	surfaceRunFunction(
+		fn: number,
+		selection: number,
+		tt: number,
+		track: number,
+		phase: 'tap' | 'down' | 'up' | 'toggle' = 'tap',
+	): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		const key = `${fn}.${selection}.${tt}.${track}`
+		// Toggle = Press, then Release on the next push (Ctrl / Alt latched from one button).
+		const step = phase === 'toggle' ? (this.surfaceHeld.has(key) ? 'up' : 'down') : phase
+		if (step === 'down') this.surfaceHeld.add(key)
+		else this.surfaceHeld.delete(key)
+		this.checkFeedbacks('surfaceFunctionHeld')
+		const press = (slot: number) => {
+			if (step !== 'up') s.write(`ukdown ${slot}`)
+			if (step !== 'down') s.write(`ukup ${slot}`)
+		}
+		const known = this.surfaceKeys.get(key)
+		if (known != null) {
+			press(known)
+			return
+		}
+		const slot = this.nextSurfaceSlot++
+		this.surfaceKeys.set(key, slot)
+		s.write(`ukreg ${slot} ${fn} ${selection} ${tt} ${track}`)
+		// eMotion stores the shortcut on its GUI thread a moment after the registration.
+		setTimeout(() => {
+			if (this.surface === s && s.isReady()) press(slot)
+		}, 250)
+	}
+
+	private stopSurfaceClient(): void {
+		if (this.surfaceFeedbackTimer) clearTimeout(this.surfaceFeedbackTimer)
+		this.surfaceFeedbackTimer = null
+		for (const t of this.surfaceFades.values()) clearInterval(t)
+		this.surfaceFades.clear()
+		if (this.surfaceBlinkTimer) clearInterval(this.surfaceBlinkTimer)
+		this.surfaceBlinkTimer = null
+		if (this.surfaceMeterTimer) clearTimeout(this.surfaceMeterTimer)
+		this.surfaceMeterTimer = null
+		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
+		this.surfaceRereadTimer = null
+		this.surfaceStopNameRefresh()
+		// A key left pressed (Ctrl / Alt toggled on) would stay held in eMotion: release it.
+		if (this.surface?.isReady())
+			for (const key of this.surfaceHeld) {
+				const slot = this.surfaceKeys.get(key)
+				if (slot != null) this.surface.write(`ukup ${slot}`)
+			}
+		this.surfaceHeld.clear()
+		if (this.surface?.isReady()) for (const key of this.surfaceKeysDown) this.surface.write(`key ${key} 0`)
+		this.surfaceKeysDown.clear()
+		// eMotion keeps counting our meter registrations: release them when the module stops.
+		if (this.surface?.isReady())
+			for (const key of this.surfaceMeterRefs.keys()) {
+				const [tt, track] = key.split('.').map(Number)
+				this.surface.registerMeters(tt, track, 0)
+			}
+		if (this.surfaceMuteRereadTimer) clearTimeout(this.surfaceMuteRereadTimer)
+		this.surfaceMuteRereadTimer = null
+		if (this.surfaceVariablesTimer) clearTimeout(this.surfaceVariablesTimer)
+		this.surfaceVariablesTimer = null
+		if (this.surfaceDefsTimer) clearTimeout(this.surfaceDefsTimer)
+		this.surfaceDefsTimer = null
+		if (!this.surface) return
+		this.surface.removeAllListeners()
+		this.surface.disconnect()
+		this.surface = null
+	}
+
+	/** eMotion dumps a whole strip (~150 controls) when a channel is selected: redraw once. */
+	private scheduleSurfaceFeedbacks(): void {
+		if (this.surfaceFeedbackTimer) return
+		this.surfaceFeedbackTimer = setTimeout(() => {
+			this.surfaceFeedbackTimer = null
+			this.surfaceUpdateBlink()
+			this.checkFeedbacks(
+				'surfaceTalk',
+				'surfaceSlotBypassed',
+				'surfaceRackOut',
+				'surfaceTbPreset',
+				'surfaceMuted',
+				'surfaceSoloed',
+				'surfaceFaderLevel',
+				'surfaceMuteAll',
+				'surfaceMuteGroup',
+				'surfacePluginState',
+				'surfacePluginValue',
+				'surfaceLock',
+				'surfaceRecording',
+				'surfaceSoloActive',
+				'surfaceSceneDirty',
+				'surfaceSessionDirty',
+				'surfaceScene',
+			)
+		}, 30)
+	}
+
+	/** Connection status: the driver in Companion Surface mode, MyRemote otherwise. */
+	private reportStatus(): void {
+		if (this.config.mode === 'surface') {
+			if (!this.surfaceProblem) this.updateStatus(InstanceStatus.Ok)
+			else if (this.surface?.isReady()) this.updateStatus(InstanceStatus.UnknownWarning, this.surfaceProblem)
+			else this.updateStatus(InstanceStatus.ConnectionFailure, this.surfaceProblem)
+			return
+		}
+		if (this.myRemoteOk) this.updateStatus(InstanceStatus.Ok)
+	}
+
+	/** Last value the driver reported for a control; asks for it once when unknown. */
+	surfaceValue(a: ControlAddress): number | null {
+		const key = controlKey(a)
+		const c = this.surfaceControls.get(key)
+		if (c) return c.value
+		if (this.surface?.isReady() && !this.surfaceAsked.has(key)) {
+			this.surfaceAsked.add(key)
+			// Plugin slots, their parameters and names only have raw values; on / off controls are
+			// read in real-world mode (raw reads of them can be wrong right after plugin-slot reads).
+			if (a.group === 4 || a.group === 8) this.surface.getx(a)
+			else this.surface.getReal(a)
+		}
+		return null
+	}
+
+	surfaceBool(a: ControlAddress): boolean {
+		const v = this.surfaceValue(a)
+		return v != null && v >= 0.5
+	}
+
+	surfaceSet(a: ControlAddress, value: number): void {
+		if (!this.surface?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		this.surface.setx(a, value)
+		// Optimistic, so a quick second toggle inverts the new state; the driver's echo confirms it.
+		const key = controlKey(a)
+		this.surfaceControls.set(key, { ...a, value, text: this.surfaceControls.get(key)?.text ?? '' })
+		this.scheduleSurfaceFeedbacks()
+	}
+
+	surfaceSetBool(a: ControlAddress, on: boolean): void {
+		this.surfaceSet(a, on ? 1 : 0)
+	}
+
+	/** Serves the Companion Surface install page: http://<companion>/instance/<label>/surface */
+	handleHttpRequest(request: CompanionHTTPRequest): CompanionHTTPResponse {
+		const p = request.path.replace(/\/+$/, '')
+		if (p === '' || p === '/surface') {
+			const page = surfaceInstallPage()
+			return {
+				status: page.status,
+				headers: { 'Content-Type': page.status === 200 ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8' },
+				body: page.body,
+			}
+		}
+		return { status: 404, body: 'Not found' }
 	}
 
 	// ─── I/O patch (experimental) ─────────────────────────────────────────
@@ -469,7 +1307,8 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		})
 		osc.on('registered', ({ style }: { style: string }) => {
 			this.log('info', `Registered with the LV1 as ${style}`)
-			this.updateStatus(InstanceStatus.Ok)
+			this.myRemoteOk = true
+			this.reportStatus()
 			// Re-request state on every connect. The LV1 doesn't spontaneously re-broadcast
 			// after a handshake the second time, so this keeps the dropdowns populated
 			// across module restarts.
@@ -488,6 +1327,7 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 			}, 2500)
 		})
 		osc.on('close', () => {
+			this.myRemoteOk = false
 			this.updateStatus(InstanceStatus.Disconnected)
 			this.consecutiveFailures++
 			this.log('warn', `Connection closed (attempt ${this.consecutiveFailures}), will auto-reconnect`)
@@ -646,11 +1486,11 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 				const s = this.ensureChannel(g, ch)
 				if (addr === '/Notify/PhaseState') {
 					s.polarity = state !== 0
-					this.checkFeedbacks(...channelFeedbacksForDelta({ polarity: s.polarity }))
+					this.checkFeedbackList(channelFeedbacksForDelta({ polarity: s.polarity }))
 					pushTrackVariable(this, g, ch, 'polarity')
 				} else {
 					s.phantom = state !== 0
-					this.checkFeedbacks(...channelFeedbacksForDelta({ phantom: s.phantom }))
+					this.checkFeedbackList(channelFeedbacksForDelta({ phantom: s.phantom }))
 					pushTrackVariable(this, g, ch, 'phantom')
 				}
 				break
@@ -1271,11 +2111,17 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 		])
 	}
 
+	/** checkFeedbacks for a list of feedback ids (nothing when it is empty). */
+	checkFeedbackList(ids: string[]): void {
+		const [first, ...rest] = ids
+		if (first) this.checkFeedbacks(first, ...rest)
+	}
+
 	applyChannelDelta(group: number, ch: number, delta: Partial<ChannelState>): void {
 		const s = this.ensureChannel(group, ch)
 		Object.assign(s, delta)
 		const channelFeedbacks = channelFeedbacksForDelta(delta)
-		if (channelFeedbacks.length) this.checkFeedbacks(...channelFeedbacks)
+		this.checkFeedbackList(channelFeedbacks)
 		if (delta.muted != null) {
 			this.checkFeedbacks('channelMute')
 			pushTrackVariable(this, group, ch, 'mute')
@@ -1413,4 +2259,5 @@ export class LV1Instance extends InstanceBase<ModuleConfig> {
 	}
 }
 
-runEntrypoint(LV1Instance, UpgradeScripts)
+export { UpgradeScripts }
+export default LV1Instance

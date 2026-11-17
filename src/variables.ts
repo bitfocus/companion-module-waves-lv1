@@ -5,14 +5,21 @@
 // Definitions are rebuilt every time the mixer config changes (detected.channels /
 // auxes / layers update). Values are pushed from main.ts as state arrives.
 
-import type { CompanionVariableDefinition, CompanionVariableValues } from '@companion-module/base'
+import type { CompanionVariableDefinitions, CompanionVariableValues } from '@companion-module/base'
 import type { LV1Instance } from './main.js'
+import { surfaceVariableDefinitions, surfaceVariableValues } from './surface-presets.js'
 import { enumerateTracks, trackLabel, trackSlug } from './tracks.js'
 
 export { trackSlug }
 
 export function UpdateVariables(self: LV1Instance): void {
-	const defs: CompanionVariableDefinition[] = []
+	// These variables are filled from MyRemote; Companion Surface mode has its own.
+	if (self.config.mode === 'surface') {
+		self.setVariableDefinitions(toDefinitions(surfaceVariableDefinitions(self)))
+		self.setVariableValues(surfaceVariableValues(self))
+		return
+	}
+	const defs: VariableDef[] = []
 
 	for (const { group, ch } of enumerateTracks(self)) {
 		const slug = trackSlug(group, ch)
@@ -73,8 +80,19 @@ export function UpdateVariables(self: LV1Instance): void {
 		defs.push({ variableId: `scene_${idx + 1}_name`, name: `Scene ${idx + 1} name (${name})` })
 	}
 
-	self.setVariableDefinitions(defs)
+	self.setVariableDefinitions(toDefinitions(defs))
 	pushAll(self)
+}
+
+interface VariableDef {
+	variableId: string
+	name: string
+}
+
+function toDefinitions(defs: VariableDef[]): CompanionVariableDefinitions {
+	const out: CompanionVariableDefinitions = {}
+	for (const d of defs) out[d.variableId] = { name: d.name }
+	return out
 }
 
 /** Push the current state of EVERY known variable. Call after definitions change
