@@ -196,6 +196,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	private surfaceMeterTimer: NodeJS.Timeout | null = null
 	/** The desk's strips, racks and groups were read on this connection. */
 	private surfaceProbed = false
+	private surfaceRereadTimer: NodeJS.Timeout | null = null
 	/** Plugin codes whose parameter catalogue was requested on this connection. */
 	private surfacePluginsAsked = new Set<string>()
 
@@ -543,6 +544,7 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		})
 		s.on('signal', (sig: EmotionSignal) => {
 			if (sig.name === 'muteGroupStateChanged') this.surfaceScheduleMuteReread()
+			if (sig.name === 'currentSessionNameChanged') this.surfaceScheduleReread()
 			if (!this.surfaceModel.applySignal(sig.name, sig.args)) return
 			this.scheduleSurfaceFeedbacks()
 			this.scheduleSurfaceVariables()
@@ -571,6 +573,25 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		})
 		this.surface = s
 		s.connect()
+	}
+
+	/**
+	 * A session was loaded (also after a mixer configuration change, which keeps the driver
+	 * connected): read which tracks exist again, then the strips, racks and groups.
+	 */
+	private surfaceScheduleReread(): void {
+		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
+		this.surfaceRereadTimer = setTimeout(() => {
+			this.surfaceRereadTimer = null
+			const s = this.surface
+			if (!s?.isReady()) return
+			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+			this.surfaceRereadTimer = setTimeout(() => {
+				this.surfaceRereadTimer = null
+				this.surfaceProbed = false
+				this.scheduleSurfaceDefinitions()
+			}, 2000)
+		}, 3000)
 	}
 
 	/** Track names / counts changed: rebuild the dropdowns, presets and variables once. */
@@ -957,6 +978,8 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		this.surfaceBlinkTimer = null
 		if (this.surfaceMeterTimer) clearTimeout(this.surfaceMeterTimer)
 		this.surfaceMeterTimer = null
+		if (this.surfaceRereadTimer) clearTimeout(this.surfaceRereadTimer)
+		this.surfaceRereadTimer = null
 		// eMotion keeps counting our meter registrations: release them when the module stops.
 		if (this.surface?.isReady())
 			for (const key of this.surfaceMeterRefs.keys()) {
