@@ -316,6 +316,9 @@ export class SurfaceModel {
 	/** Returns 'names' when the track catalogue changed, 'tb' for the Talk Back preset, else null. */
 	applyControl(c: ControlUpdate): 'names' | 'tb' | null {
 		if (c.group === 8 && c.cid === -1 && c.secType === -1 && c.secIdx === -1) {
+			// eMotion also sends section titles as track -1: only real tracks are strips.
+			const type = SURFACE_TRACK_TYPES.find((t) => t.tt === c.tt)
+			if (c.track < 0 || (type && c.track >= type.max)) return null
 			const key = `${c.tt}.${c.track}`
 			const prev = this.tracks.get(key)
 			if (c.value === MISSING && !c.text) {
