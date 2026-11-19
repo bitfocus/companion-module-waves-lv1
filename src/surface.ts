@@ -6,7 +6,7 @@ import path from 'node:path'
 import type { ControlAddress } from './surface-client.js'
 
 /** Version of the driver installers shipped with this module (surface/CompanionSurface-Setup.exe / .pkg). */
-export const SURFACE_DRIVER_VERSION = '0.1.25'
+export const SURFACE_DRIVER_VERSION = '0.1.26'
 export const SURFACE_DEFAULT_PORT = 9460
 /** The driver installers: Windows (Inno Setup) and macOS (unsigned .pkg). */
 export const SURFACE_INSTALLERS = { windows: 'CompanionSurface-Setup.exe', mac: 'CompanionSurface-Setup.pkg' } as const
