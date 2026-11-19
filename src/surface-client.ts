@@ -5,7 +5,8 @@
 //                 ctl <tt> <track> <group> <secType> <secIdx> <cid> <value> <flags> <text>
 //                 val <tt> <track> <group> <secType> <secIdx> <cid> <rc> <value> <text>
 //                 pong | ok … | err … | warn …
-//   us → driver   setx / getx / fn / ping / sub / auth
+//                 scene <index> <name> … then scenes <count> | appinfo <version>
+//   us → driver   setx / getx / settext / scenes / fn / ping / sub / auth
 //
 // tt / track = the desk's track type and index (input = 0, FX = 2, Talk Back = 8, Monitor = 25…);
 // group / secType / secIdx / cid address one control inside the track.
@@ -59,6 +60,15 @@ export interface EmotionSignal {
 	args: unknown[]
 }
 
+/** An internal route's state (Patch > Internal). */
+export interface RouteUpdate {
+	srcTt: number
+	srcTrack: number
+	dstTt: number
+	dstTrack: number
+	on: boolean
+}
+
 /** A message between eMotion's surfaces (InterMapper); payload starts at the command header. */
 export interface InterMapMessage {
 	msg: number
@@ -94,7 +104,8 @@ export interface SurfaceClientOptions {
 /**
  * Events: 'ready' (version), 'control' (ControlUpdate, from ctl and val lines),
  * 'intermap' (InterMapMessage, after `sub im 1`), 'real' (RealUpdate), 'props' (ControlProps),
- * 'signal' (EmotionSignal),
+ * 'signal' (EmotionSignal), 'scenes' (string[], the session's scene names), 'appinfo' (version),
+ * 'route' (RouteUpdate),
  * 'driverError' (message), 'authFailed', 'close', 'error' (Error).
  */
 export class SurfaceClient extends EventEmitter {
@@ -108,6 +119,7 @@ export class SurfaceClient extends EventEmitter {
 	private pending: string[] = []
 	private inflight = 0
 	public version: string | null = null
+	private sceneNames: string[] = []
 
 	constructor(private opts: SurfaceClientOptions) {
 		super()
@@ -145,6 +157,26 @@ export class SurfaceClient extends EventEmitter {
 	/** Read in real-world units; answered with a 'real' event. */
 	getReal(a: ControlAddress): void {
 		this.request(`getu 3 ${addr(a)}`)
+	}
+
+	/** Write a control's text (a strip's name: group 8, cid -1). Driver 0.1.24+. */
+	setText(a: ControlAddress, text: string): void {
+		this.write(`settext ${addr(a)} ${text.replace(/[\r\n]+/g, ' ')}`)
+	}
+
+	/** The session's scene names; answered with a 'scenes' event. Driver 0.1.24+. */
+	requestScenes(): void {
+		this.write('scenes')
+	}
+
+	/** Read an internal route (Patch > Internal); answered with a 'route' event. Driver 0.1.25+. */
+	routeGet(srcTt: number, srcTrack: number, dstTt: number, dstTrack: number): void {
+		this.request(`routeget ${srcTt} ${srcTrack} ${dstTt} ${dstTrack}`)
+	}
+
+	/** Set an internal route on / off. Driver 0.1.25+. */
+	routeSet(srcTt: number, srcTrack: number, dstTt: number, dstTrack: number, on: boolean): void {
+		this.write(`routeset ${srcTt} ${srcTrack} ${dstTt} ${dstTrack} ${on ? 1 : 0}`)
 	}
 
 	/** Ask eMotion's meter engine for a strip's meters (bit k = meter k); mask 0 stops them. */
@@ -282,6 +314,31 @@ export class SurfaceClient extends EventEmitter {
 					minText: at('1fd'),
 					maxText: at('27d'),
 				} satisfies ControlProps)
+				return
+			}
+			case 'scene': {
+				// scene <index> <name…>: one entry of the list asked for with `scenes`
+				const i = parseInt(parts[1], 10)
+				if (Number.isFinite(i)) this.sceneNames[i] = parts.slice(2).join(' ')
+				return
+			}
+			case 'scenes': {
+				// scenes <count> rc=<rc>: the end of the list
+				const n = parseInt(parts[1], 10)
+				const list = Number.isFinite(n) ? Array.from({ length: n }, (_, i) => this.sceneNames[i] ?? '') : []
+				this.sceneNames = []
+				this.emit('scenes', list)
+				return
+			}
+			case 'appinfo':
+				this.emit('appinfo', parts.slice(1).join(' '))
+				return
+			case 'route': {
+				this.answered()
+				// route <srcTt> <srcTrack> <dstTt> <dstTrack> <rc> <1|0|-1>
+				const [srcTt, srcTrack, dstTt, dstTrack, rc, state] = parts.slice(1, 7).map((p) => parseInt(p, 10))
+				if ([srcTt, srcTrack, dstTt, dstTrack].some((n) => !Number.isFinite(n)) || rc !== 0 || state < 0) return
+				this.emit('route', { srcTt, srcTrack, dstTt, dstTrack, on: state === 1 } satisfies RouteUpdate)
 				return
 			}
 			case 'sig': {

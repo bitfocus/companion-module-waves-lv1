@@ -21,6 +21,7 @@ import {
 	type AnyOpt,
 } from './surface-ui.js'
 import { featureActions, featureFeedbacks } from './surface-features.js'
+import { parityActions, parityFeedbacks } from './surface-parity.js'
 
 function phaseField(): AnyOpt {
 	return {
@@ -49,6 +50,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 
 	return {
 		...featureActions(self),
+		...parityActions(self),
 		surfaceFlip: {
 			name: 'Flip: Sends on fader',
 			description:
@@ -185,6 +187,7 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 export function surfaceFeedbacks(self: LV1Instance): CompanionFeedbackDefinitions {
 	return {
 		...featureFeedbacks(self),
+		...parityFeedbacks(self),
 		surfaceKeyHeld: {
 			type: 'boolean',
 			name: 'Keyboard: key is held (Ctrl, Alt, Shift)',

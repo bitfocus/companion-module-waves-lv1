@@ -13,9 +13,44 @@ import {
 	STRIP_TYPES,
 	SURFACE_MIXERS,
 	SURFACE_TRACK_TYPES,
+	input,
+	muteGroupAddress,
+	pan,
 	strip,
 } from './surface-model.js'
 import { controlKey } from './surface-client.js'
+import { trackColorHex } from './surface-parity.js'
+import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
+
+/** MyRemote's own user keys live on eMotion's surface 5. */
+const MYREMOTE_SURFACE = 5
+
+/** A user key definition as text: short label ("Mon 1") and the whole function ("Flip Sends: Mixer 1: Mon 1"). */
+function userKeyText(
+	self: LV1Instance,
+	d: { action: number; sel: number; tt: number; ti: number } | undefined,
+): { short: string; full: string } {
+	if (!d || d.action <= 0) return { short: '', full: '' }
+	const m = self.surfaceModel
+	const trackName = (tt: number, ti: number) => {
+		const t = SURFACE_TRACK_TYPES.find((x) => x.tt === tt)
+		const fallback = t ? (t.max === 1 ? t.label : `${t.label} ${ti + 1}`) : `${tt}:${ti + 1}`
+		return ti >= 0 ? m.name(tt, ti) || fallback : ''
+	}
+	if (d.action === FN_FLIP_SENDS) {
+		const mixer = SURFACE_MIXERS.find((x) => x.selection === d.sel)?.label ?? `Mixer ${d.sel + 1}`
+		const aux = trackName(d.tt, d.ti)
+		return { short: aux, full: `Flip Sends: ${mixer}: ${aux}` }
+	}
+	if (d.action === FN_TB_PRESET) return { short: `TB ${d.sel}`, full: `Talk Back: Preset ${d.sel}` }
+	const fn = SURFACE_FUNCTIONS.find((f) => f.id === d.action)
+	const name = fn?.name ?? `Function ${d.action}`
+	const parts: string[] = []
+	if (fn && (fn.param === 'track' || fn.param === 'track+number')) parts.push(trackName(d.tt, d.ti))
+	if (fn && (fn.param === 'number' || fn.param === 'track+number') && d.sel >= 0) parts.push(String(d.sel))
+	const detail = parts.filter(Boolean).join(' ')
+	return { short: detail || name.replace(/^[^:]*:\s*/, ''), full: detail ? `${name}: ${detail}` : name }
+}
 
 const WHITE = combineRgb(255, 255, 255)
 const BLACK = combineRgb(0, 0, 0)
@@ -386,6 +421,50 @@ export function surfacePresets(self: LV1Instance): Record<string, Preset> {
 		feedbacks: [{ feedbackId: 'surfaceTalk', options: {}, style: { bgcolor: combineRgb(200, 0, 0), color: WHITE } }],
 	}
 
+	// ── Talk Back destinations: one button per FX / Monitor bus ──
+	for (const t of SURFACE_TRACK_TYPES.filter((x) => x.tt === 2 || x.tt === 25)) {
+		for (const tr of self.surfaceModel.list(t.tt)) {
+			const aux = `${t.tt}:${tr.track}`
+			presets[`tb_to_${t.slug}${tr.track + 1}`] = button(
+				'Talk Back',
+				`Talk Back to ${t.label} ${tr.track + 1}`,
+				`TB TO\n$(${label}:${t.slug}${tr.track + 1}_name)`,
+				[{ actionId: 'surfaceTbAssign', options: { aux, state: 'toggle', state_expr: '' } }],
+				[{ feedbackId: 'surfaceTbAssigned', options: { aux }, style: { bgcolor: AMBER, color: WHITE } }],
+			)
+		}
+	}
+
+	// ── MyRemote's own user keys (as set up for MyRemote in eMotion): pressed while the button is held ──
+	for (let k = 1; k <= 16; k++) {
+		presets[`myremote_key_${k}`] = button(
+			'User keys (MyRemote)',
+			`MyRemote user key ${k}`,
+			`USER\nKEY ${k}`,
+			[{ actionId: 'surfaceMyRemoteKey', options: { key: String(k), phase: 'down' } }],
+			[],
+			[{ actionId: 'surfaceMyRemoteKey', options: { key: String(k), phase: 'up' } }],
+		)
+	}
+
+	// ── Spill ──
+	for (const m of SURFACE_MIXERS.filter((x) => x.id !== 'all')) {
+		presets[`spill_${m.id}`] = button('Mixer', `Spill (${m.label})`, `SPILL\n${m.label.toUpperCase()}`, [
+			{ actionId: 'surfaceSpill', options: { mixer: m.id } },
+		])
+	}
+
+	// ── Scenes of the session, by name ──
+	self.surfaceModel.sceneList.forEach((_name, i) => {
+		presets[`scene_${i + 1}`] = button(
+			'Scenes',
+			`Scene ${i + 1}`,
+			`$(${label}:scene_${i + 1}_name)`,
+			[{ actionId: 'surfaceSceneRecallList', options: { scene: String(i) } }],
+			[{ feedbackId: 'surfaceSceneIs', options: { scene: String(i) }, style: { bgcolor: BLUE, color: WHITE } }],
+		)
+	})
+
 	return presets
 }
 
@@ -402,7 +481,21 @@ export function surfaceVariableDefinitions(self: LV1Instance): Array<{ variableI
 			const slug = slugOf(t, tr.track)
 			const label = t.max === 1 ? t.label : `${t.label} ${tr.track + 1}`
 			defs.push({ variableId: `${slug}_name`, name: `${label} name` })
+			defs.push({ variableId: `${slug}_color`, name: `${label} colour (#rrggbb)` })
+			if (t.tt === 0) {
+				defs.push({ variableId: `${slug}_ingain`, name: `${label} preamp gain (dB)` })
+				defs.push({ variableId: `${slug}_trim`, name: `${label} digital trim (dB)` })
+				defs.push({ variableId: `${slug}_phantom`, name: `${label} +48 V (on / off)` })
+				defs.push({ variableId: `${slug}_polarity`, name: `${label} polarity inverted (on / off)` })
+			}
 			if (!STRIP_TYPES.includes(t.tt)) continue
+			defs.push({ variableId: `${slug}_pan`, name: `${label} pan / balance` })
+			defs.push({ variableId: `${slug}_width`, name: `${label} stereo width` })
+			defs.push({ variableId: `${slug}_rotate`, name: `${label} stereo rotation (°)` })
+			if (self.surfaceVuAll) {
+				defs.push({ variableId: `${slug}_vu`, name: `${label} VU, left / mono (dB)` })
+				defs.push({ variableId: `${slug}_vu_r`, name: `${label} VU, right (dB)` })
+			}
 			defs.push({ variableId: `${slug}_fader`, name: `${label} fader (dB)` })
 			defs.push({
 				variableId: `${slug}_mute`,
@@ -429,6 +522,28 @@ export function surfaceVariableDefinitions(self: LV1Instance): Array<{ variableI
 		{ variableId: 'selected_channel', name: 'Selected channel name' },
 		{ variableId: 'session', name: 'Session name' },
 		{ variableId: 'session_dirty', name: 'Session has unsaved changes (yes / no)' },
+		{ variableId: 'scene_count', name: 'Number of scenes in the session' },
+		{ variableId: 'channels_total', name: 'Input channels on the desk' },
+		{ variableId: 'auxes_total', name: 'Aux buses (FX + Monitor) on the desk' },
+		{ variableId: 'console_version', name: 'eMotion LV1 version' },
+		{ variableId: 'page', name: 'Page eMotion shows (Mixer 1, Channel…)' },
+		{ variableId: 'current_mixer', name: 'Mixer shown (1 / 2, blank on other pages)' },
+		{ variableId: 'current_layer_index', name: 'Layer of the mixer shown (1 = first)' },
+		{ variableId: 'flip_active', name: 'A mixer is flipped to an aux (yes / no)' },
+		{ variableId: 'flip_name', name: 'Aux the shown mixer is flipped to (blank = none)' },
+	)
+	for (let g = 0; g < MUTE_GROUPS; g++) defs.push({ variableId: `mg_${g + 1}`, name: `Mute group ${g + 1} (on / off)` })
+	for (let k = 1; k <= 16; k++)
+		defs.push(
+			{ variableId: `userkey_${k}_name`, name: `MyRemote user key ${k}: short label (e.g. "Mon 1")` },
+			{
+				variableId: `userkey_${k}_function`,
+				name: `MyRemote user key ${k}: function (e.g. "Flip Sends: Mixer 1: Mon 1")`,
+			},
+			{ variableId: `userkey_${k}_assigned`, name: `MyRemote user key ${k}: assigned (on / off)` },
+		)
+	self.surfaceModel.sceneList.forEach((name, i) =>
+		defs.push({ variableId: `scene_${i + 1}_name`, name: `Scene ${i + 1} name (${name || 'no name'})` }),
 	)
 	return defs
 }
@@ -442,7 +557,35 @@ export function surfaceVariableValues(self: LV1Instance): Record<string, string>
 		for (const tr of m.list(t.tt)) {
 			const slug = slugOf(t, tr.track)
 			v[`${slug}_name`] = tr.name
+			v[`${slug}_color`] = trackColorHex(self, t.tt, tr.track)
+			if (t.tt === 0) {
+				const bank = self.surfaceInputBank(tr.track)
+				const num = (x: number | undefined) => (x == null ? '' : x.toFixed(1))
+				const onOff = (x: number | null) => (x == null ? '' : x >= 0.5 ? 'on' : 'off')
+				v[`${slug}_ingain`] = num(m.real.get(controlKey(input.gain(tr.track, bank, 0))))
+				v[`${slug}_trim`] = num(m.real.get(controlKey(input.trim(tr.track, 0))))
+				v[`${slug}_phantom`] = onOff(
+					self.surfaceControls.get(controlKey(input.phantom(tr.track, bank, 0)))?.value ?? null,
+				)
+				v[`${slug}_polarity`] = onOff(self.surfaceControls.get(controlKey(input.polarity(tr.track, 0)))?.value ?? null)
+			}
 			if (!STRIP_TYPES.includes(t.tt)) continue
+			const real = (
+				a: { tt: number; track: number; group: number; secType: number; secIdx: number; cid: number },
+				digits: number,
+			) => {
+				const x = m.real.get(controlKey(a))
+				return x == null ? '' : x.toFixed(digits)
+			}
+			v[`${slug}_pan`] = real(pan.pan(t.tt, tr.track), 1)
+			v[`${slug}_width`] = real(pan.width(t.tt, tr.track), 2)
+			v[`${slug}_rotate`] = real(pan.rotate(t.tt, tr.track), 1)
+			if (self.surfaceVuAll) {
+				const legs = m.meters.get(`${t.tt}.${tr.track}`)?.legs ?? []
+				const db = (x: number | undefined) => (x == null ? '' : x <= -144 ? '-inf' : x.toFixed(1))
+				v[`${slug}_vu`] = db(legs[0])
+				v[`${slug}_vu_r`] = db(legs[1] ?? legs[0])
+			}
 			const db = m.real.get(controlKey(strip.fader(t.tt, tr.track)))
 			v[`${slug}_fader`] = db == null ? '' : db <= -144 ? '-inf' : db.toFixed(1)
 			const mute = self.surfaceControls.get(controlKey(strip.mute(t.tt, tr.track)))
@@ -470,5 +613,30 @@ export function surfaceVariableValues(self: LV1Instance): Record<string, string>
 	v.selected_channel = g.channelName
 	v.session = g.session
 	v.session_dirty = yesNo(g.sessionDirty)
+	if (g.scene != null && !v.scene_name) v.scene_name = m.sceneList[g.scene] ?? ''
+	v.scene_count = m.sceneList.length ? String(m.sceneList.length) : ''
+	m.sceneList.forEach((name, i) => (v[`scene_${i + 1}_name`] = name))
+	v.channels_total = String(m.list(0).length)
+	v.auxes_total = String(m.list(2).length + m.list(25).length)
+	v.console_version = m.appVersion
+	v.page = g.page
+	const shown = SURFACE_MIXERS.find((x) => x.label === g.page)
+	v.current_mixer = shown && shown.id !== 'all' ? String(shown.surface + 1) : ''
+	const layer = shown ? m.layers.get(shown.surface) : undefined
+	v.current_layer_index = layer != null ? String(layer + 1) : ''
+	v.flip_active = yesNo(SURFACE_MIXERS.some((x) => m.flips.get(x.surface)?.on))
+	const shownFlip = shown ? m.flips.get(shown.surface) : undefined
+	v.flip_name = shownFlip?.on ? m.name(shownFlip.tt, shownFlip.track) : ''
+	for (let k = 1; k <= 16; k++) {
+		const d = m.userKeys.get(`${MYREMOTE_SURFACE}.${k - 1}`)
+		const text = userKeyText(self, d)
+		v[`userkey_${k}_name`] = text.short
+		v[`userkey_${k}_function`] = text.full
+		v[`userkey_${k}_assigned`] = d ? (d.action > 0 ? 'on' : 'off') : ''
+	}
+	for (let gi = 0; gi < MUTE_GROUPS; gi++) {
+		const mg = self.surfaceControls.get(controlKey(muteGroupAddress(gi)))
+		v[`mg_${gi + 1}`] = mg ? (mg.value >= 0.5 ? 'on' : 'off') : ''
+	}
 	return v
 }

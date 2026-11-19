@@ -75,6 +75,154 @@ export const strip = {
 	}),
 }
 
+/**
+ * Controls MyRemote also reaches (same addresses as eMotion's MyRemote server uses), written and
+ * read in real-world units: the output pan section, sends, the input section.
+ */
+export const pan = {
+	/** Pan (mono) / balance (stereo), group 7 cid 6. */
+	pan: (tt: number, track: number): ControlAddress => ({ tt, track, group: 7, secType: -1, secIdx: -1, cid: 6 }),
+	/** Stereo width, cid 5 (-1.4 .. 1.4, 1 = normal). */
+	width: (tt: number, track: number): ControlAddress => ({ tt, track, group: 7, secType: -1, secIdx: -1, cid: 5 }),
+	/** Stereo rotation, cid 2 (degrees, -45 .. 45). */
+	rotate: (tt: number, track: number): ControlAddress => ({ tt, track, group: 7, secType: -1, secIdx: -1, cid: 2 }),
+}
+
+/** A strip's send to an aux (eMotion's combined aux index: FX first, then Monitors), group 5. */
+export const send = {
+	on: (tt: number, track: number, aux: number): ControlAddress => ({
+		tt,
+		track,
+		group: 5,
+		secType: aux,
+		secIdx: -1,
+		cid: 0,
+	}),
+	level: (tt: number, track: number, aux: number): ControlAddress => ({
+		tt,
+		track,
+		group: 5,
+		secType: aux,
+		secIdx: -1,
+		cid: 2,
+	}),
+	pan: (tt: number, track: number, aux: number): ControlAddress => ({
+		tt,
+		track,
+		group: 5,
+		secType: aux,
+		secIdx: -1,
+		cid: 7,
+	}),
+}
+
+/** Key of an internal route in SurfaceModel.routes. */
+export const surfaceRouteKey = (srcTt: number, srcTrack: number, dstTt: number, dstTrack: number): string =>
+	`${srcTt}.${srcTrack}>${dstTt}.${dstTrack}`
+
+/** Internal route destinations (Patch > Internal), as the MyRemote mode offers them; Aux = the send. */
+export const ROUTE_DESTS = [
+	{ id: 'grp', label: 'Group bus', tt: 1, count: 16 },
+	{ id: 'aux', label: 'Aux (FX / Monitor send)', tt: -1, count: 0 },
+	{ id: 'mtx', label: 'Matrix', tt: 6, count: 16 },
+	{ id: 'dca', label: 'Link (DCA)', tt: 12, count: 16 },
+	{ id: 'mg', label: 'Mute group membership', tt: 13, count: 8 },
+	{ id: 'lr', label: 'LR (Main)', tt: 3, count: 1 },
+	{ id: 'c', label: 'Center', tt: 4, count: 1 },
+	{ id: 'm', label: 'Mono', tt: 5, count: 1 },
+] as const
+
+/** Talk Back track: its sends are the Talk Back destinations (engage to output). */
+export const TALKBACK_TT = 8
+
+/**
+ * An input channel's input section (group 0): input bank A / B (cid 5, 0 = A); per bank and leg
+ * (0 = left / mono, 1 = right) the preamp gain (cid 0, dB) and +48 V (cid 2); per leg the
+ * polarity (cid 7) and the digital trim (cid 8, dB).
+ */
+export const input = {
+	bank: (track: number): ControlAddress => ({ tt: 0, track, group: 0, secType: -1, secIdx: -1, cid: 5 }),
+	gain: (track: number, bank: number, leg: number): ControlAddress => ({
+		tt: 0,
+		track,
+		group: 0,
+		secType: bank,
+		secIdx: leg,
+		cid: 0,
+	}),
+	phantom: (track: number, bank: number, leg: number): ControlAddress => ({
+		tt: 0,
+		track,
+		group: 0,
+		secType: bank,
+		secIdx: leg,
+		cid: 2,
+	}),
+	polarity: (track: number, leg: number): ControlAddress => ({
+		tt: 0,
+		track,
+		group: 0,
+		secType: -1,
+		secIdx: leg,
+		cid: 7,
+	}),
+	trim: (track: number, leg: number): ControlAddress => ({ tt: 0, track, group: 0, secType: -1, secIdx: leg, cid: 8 }),
+}
+
+/** A track's colour: group 18, cid -1, value = index in eMotion's 32-colour palette (read only). */
+export const colorAddress = (tt: number, track: number): ControlAddress => ({
+	tt,
+	track,
+	group: 18,
+	secType: -1,
+	secIdx: -1,
+	cid: -1,
+})
+
+/** eMotion's track colours, by palette index. */
+export const LV1_PALETTE = [
+	'#5e98a0',
+	'#3c5f7b',
+	'#6455af',
+	'#61ac61',
+	'#1a8e66',
+	'#87ccd1',
+	'#6c869b',
+	'#d9a964',
+	'#d96464',
+	'#0564dc',
+	'#239dcb',
+	'#05ffff',
+	'#136a84',
+	'#87a5d2',
+	'#0fa2ab',
+	'#718f76',
+	'#64ffa5',
+	'#8c51c0',
+	'#cd878c',
+	'#ffe664',
+	'#e14040',
+	'#ffffff',
+	'#b4055a',
+	'#8cff12',
+	'#a0a0a0',
+	'#fa7b14',
+	'#ff00ff',
+	'#cc8ec1',
+	'#e4618d',
+	'#98845c',
+	'#946b7c',
+	'#a04182',
+]
+
+/** Controls whose value is kept in real-world units (model.real) rather than eMotion's raw 0-1000. */
+export function isRealValued(a: ControlAddress): boolean {
+	if (a.group === 7) return a.secType === -1 && (a.cid === 0 || a.cid === 2 || a.cid === 5 || a.cid === 6)
+	if (a.group === 5) return a.secType >= 0 && (a.cid === 2 || a.cid === 7)
+	if (a.group === 0 && a.tt === 0) return (a.cid === 0 && a.secType >= 0) || (a.cid === 8 && a.secType === -1)
+	return false
+}
+
 export interface PluginParam {
 	index: number
 	name: string
@@ -171,7 +319,19 @@ export class SurfaceModel {
 		session: '',
 		sessionDirty: null as boolean | null,
 		userKeyLights: new Map<number, boolean>(),
+		/** Page eMotion shows ("Mixer 1", "Channel"…), from the driver. */
+		page: '',
 	}
+	/** The session's scene names, in order (driver `scenes`). */
+	sceneList: string[] = []
+	/** eMotion's version. */
+	appVersion = ''
+	/** Layer each mixer view shows (0-based), key = view surface. */
+	layers = new Map<number, number>()
+	/** Internal routes read from the desk, key surfaceRouteKey(). */
+	routes = new Map<string, boolean>()
+	/** User key definitions eMotion announced (userKeyDataNotified), key `${surface}.${index}`. */
+	userKeys = new Map<string, { action: number; sel: number; tt: number; ti: number }>()
 
 	reset(): void {
 		this.tracks.clear()
@@ -194,6 +354,40 @@ export class SurfaceModel {
 		this.gui.sessionDirty = null
 		this.gui.channelName = ''
 		this.gui.session = ''
+		this.gui.page = ''
+		this.sceneList = []
+		this.layers.clear()
+		this.routes.clear()
+		this.userKeys.clear()
+	}
+
+	/** userKeyDataNotified [surface, index, {action, sel, tt, ti}]. True when a definition changed. */
+	applyUserKeyData(args: unknown[]): boolean {
+		const [surface, index, data] = args
+		if (typeof surface !== 'number' || typeof index !== 'number' || !data || typeof data !== 'object') return false
+		const d = data as Record<string, unknown>
+		const num = (v: unknown) => (typeof v === 'number' ? v : -1)
+		const next = { action: num(d.action), sel: num(d.sel), tt: num(d.tt), ti: num(d.ti) }
+		const key = `${surface}.${index}`
+		const prev = this.userKeys.get(key)
+		if (prev && prev.action === next.action && prev.sel === next.sel && prev.tt === next.tt && prev.ti === next.ti)
+			return false
+		this.userKeys.set(key, next)
+		return true
+	}
+
+	/** eMotion's combined aux index of an FX (2) or Monitor (25) bus: FX first, then Monitors; -1 otherwise. */
+	auxIndex(tt: number, track: number): number {
+		return tt === 2 ? track : tt === 25 ? this.list(2).length + track : -1
+	}
+
+	/** A mixer view's state (InterMapper msg 0, double @0x14 = current layer). True when it changed. */
+	applyLayer(m: InterMapMessage): boolean {
+		if (m.msg !== 0 || !SURFACE_MIXERS.some((x) => x.surface === m.src) || m.payload.length < 0x1c) return false
+		const layer = Math.round(m.payload.readDoubleLE(0x14))
+		if (!Number.isFinite(layer) || layer < 0 || layer > 64 || this.layers.get(m.src) === layer) return false
+		this.layers.set(m.src, layer)
+		return true
 	}
 
 	/**
@@ -246,6 +440,9 @@ export class SurfaceModel {
 			case 'sessionDirtyStatus':
 				this.gui.sessionDirty = b(0)
 				return 'session'
+			case 'pageShown':
+				this.gui.page = t(0)
+				return 'page'
 			case 'userKeyLight': {
 				const i = n(0)
 				if (i != null) this.gui.userKeyLights.set(i, b(1))
