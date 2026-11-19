@@ -18,16 +18,18 @@ export const SLOT_CHOICES = Array.from({ length: 8 }, (_, i) => ({ id: String(i)
 /**
  * "tt:track" ids for every track the desk reported, labelled "Ch 1 — Kick". Before the desk has
  * been read, every possible track of the type is listed, so saved buttons keep valid values.
+ * Once it has, a type the desk has none of (Monitor buses on an LV1 without them) is left out.
  */
 export function stripChoices(
 	self: LV1Instance,
 	types: readonly number[] = SURFACE_TRACK_TYPES.map((t) => t.tt),
 ): DropdownChoice[] {
 	const out: DropdownChoice[] = []
+	const deskRead = self.surfaceModel.tracks.size > 0
 	for (const t of SURFACE_TRACK_TYPES) {
 		if (!types.includes(t.tt)) continue
 		const known = self.surfaceModel.list(t.tt)
-		const tracks = known.length ? known : Array.from({ length: t.max }, (_, track) => ({ track, name: '' }))
+		const tracks = known.length || deskRead ? known : Array.from({ length: t.max }, (_, track) => ({ track, name: '' }))
 		for (const tr of tracks) {
 			const label = t.max === 1 ? t.label : `${t.label} ${tr.track + 1}`
 			out.push({ id: `${t.tt}:${tr.track}`, label: tr.name && tr.name !== label ? `${label} — ${tr.name}` : label })

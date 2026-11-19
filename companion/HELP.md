@@ -247,15 +247,30 @@ With it the module does everything over the network, without MyRemote:
   desk: it blinks while a strip is muted by a mute group, Mute All or a Link
 - **Mute All** and the **mute groups**
 - **Flips** (sends on fader) to an FX or Monitor send for Mixer 1, Mixer 2 or the All page; eMotion stays on the page it shows
-- **Talk Back**: TALK and the Talk Back presets
+- **Pan / balance, stereo width and rotation** of any strip, with fades
+- **Sends** to FX and Monitor buses: on / off, level in dB (with fades) and pan
+- **Talk Back**: TALK, the Talk Back presets and the destinations (engage to output)
+- **Input section** of the channels: preamp gain, +48 V, digital trim and polarity
+  (on the input bank, A or B, each channel uses)
 - **eMotion plugins**: any parameter, picked by plugin and parameter name, with
   fades; slot bypass (slots 1-8) and rack In / Out
-- **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…)
+- **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…), and
+  **MyRemote's own 16 user keys** (as set up for MyRemote in eMotion)
+- **Scenes** picked by name from the session's list, with a feedback and a
+  button per scene; **Spill** for Mixer 1 / 2; **renaming** a strip
+- **Internal routes** (Patch > Internal): group buses, Links (DCA), mute group
+  membership, LR / Center / Mono and matrices, with a feedback (aux = the send)
 - **Ctrl / Alt / Shift** held on the eMotion computer like its keyboard (momentary
   or toggle presets): Ctrl and Alt together work, so Ctrl + Alt + drag rotates a
   pan knob from the touch screen. Keys go up again when Companion disconnects
 - **VU meters**: the _Strip: VU meter level_ feedback gives 0-100 for a Gauge
-  element (the flip presets come with one)
+  element (the flip presets come with one); _Strip: Meter above a level_
+- **Track colours** from eMotion on the buttons (_Strip: Colour_ feedback)
+- **Variables** like the MyRemote mode: names, faders, mutes, solos, pan / width
+  / rotation, colours, the input section, scenes (names, count, current), mute
+  groups, flips, the page and layer shown, the eMotion version, MyRemote's user
+  keys (label, function, assigned). VU variables for every strip are an option
+  in the connection settings (more traffic from the desk)
 
 Each one has a feedback that follows changes made on the desk.
 

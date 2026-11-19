@@ -20,14 +20,20 @@ export type ModuleConfig = {
 	surfacePort?: number
 	/** Password set in the Companion Surface .ini (blank = none). */
 	surfacePassword?: string
-	/** IP of the eMotion LV1 computer in Companion Surface mode (override). Blank = the LV1 picked in
-	 *  `surfaceSelected`, else the first one found on the network. */
+	/** IP or name (e.g. localhost) of the eMotion LV1 computer in Companion Surface mode (override).
+	 *  Blank = the LV1 picked in `surfaceSelected`, else the first one found on the network. */
 	surfaceHost?: string
 	/** Companion Surface mode: IP of the LV1 picked from the discovered list. Empty = automatic. */
 	surfaceSelected?: string
+	/** Companion Surface mode: VU meter variables for every strip (more traffic from the desk). */
+	surfaceVuVariables?: boolean
 }
 
 const IPV4_OR_EMPTY = '/^$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)$/'
+/** IPv4, a computer name (localhost, LV1-PC.local) or empty. A name needs a letter, so "192.168.1" stays an error. */
+const IPV4_OR_NAME_OR_EMPTY =
+	'/^$|^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)$' +
+	'|^(?=[^.]*[A-Za-z]|.*\\.[^.]*[A-Za-z])[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/'
 
 /** Install page links on every IPv4 address of this (Companion's) computer. */
 function installLinks(label: string): string {
@@ -46,9 +52,9 @@ function installLinks(label: string): string {
 export function GetConfigFields(label = '', config?: Partial<ModuleConfig>): SomeCompanionConfigField[] {
 	const { entries, ageMs } = getDiscoveryCache()
 
-	// Kick off a fresh discovery in the background every time the config dialog opens.
-	// Companion's getConfigFields is synchronous so we can't await — but the next time
-	// the user opens this dialog, the cache will reflect the latest scan.
+	// Kick off a fresh discovery every time the config dialog opens (the background scans
+	// keep the list current anyway). Companion's getConfigFields is synchronous so we can't
+	// await — the next time the user opens this dialog, the cache reflects that scan.
 	void refreshDiscovery()
 
 	const ageStr = ageMs >= 0 ? `${Math.round(ageMs / 1000)} s ago` : 'never'
@@ -99,7 +105,7 @@ export function GetConfigFields(label = '', config?: Partial<ModuleConfig>): Som
 			? `⏳ No LV1 found yet. A scan is running in the background — close this dialog and reopen it in a few seconds.\n\n` +
 				`Scanning on: ${ifaceList}\n\n` +
 				`If the LV1 computer is on another subnet (routed network, VPN, Companion in Docker), type its IP below.`
-			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} found (cached ${ageStr}). Reopen this dialog to see a fresh scan.\n\n` +
+			: `✓ ${entries.length} LV1${entries.length > 1 ? 's' : ''} found (scanned ${ageStr}; the list is kept up to date in the background).\n\n` +
 				`Scanning on: ${ifaceList}`
 
 	const surfaceOnly = "$(options:mode) == 'surface'"
@@ -150,11 +156,13 @@ export function GetConfigFields(label = '', config?: Partial<ModuleConfig>): Som
 		{
 			type: 'textinput',
 			id: 'surfaceHost',
-			label: 'eMotion LV1 computer IP (override)',
+			label: 'eMotion LV1 computer IP or name (override)',
 			width: 6,
 			default: '',
-			tooltip: 'Optional: only when the LV1 is not in the list above. Blank = use the list.',
-			regex: IPV4_OR_EMPTY,
+			tooltip:
+				'Optional: only when the LV1 is not in the list above. An IP, a computer name, or localhost when ' +
+				'Companion runs on the eMotion computer. Blank = use the list.',
+			regex: IPV4_OR_NAME_OR_EMPTY,
 			isVisibleExpression: surfaceOnly,
 		},
 		{
@@ -173,6 +181,17 @@ export function GetConfigFields(label = '', config?: Partial<ModuleConfig>): Som
 			label: 'Password (blank = none)',
 			width: 3,
 			default: '',
+			isVisibleExpression: surfaceOnly,
+		},
+		{
+			type: 'checkbox',
+			id: 'surfaceVuVariables',
+			label: 'VU meter variables for every strip',
+			tooltip:
+				'Adds $(…:in1_vu) / _vu_r (dB) for every strip, updated twice a second. It asks eMotion for every strip’s meters: ' +
+				'more traffic from the desk. VU feedbacks on buttons work without it.',
+			width: 12,
+			default: false,
 			isVisibleExpression: surfaceOnly,
 		},
 		{

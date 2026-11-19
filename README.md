@@ -10,11 +10,11 @@
 
 Pick one in the connection settings, **Connect through**:
 
-|                     | **MyRemote**                                             | **Companion Surface**                                                                                                  |
-| ------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| What it is          | The protocol of Waves' MyFOH / MyMon apps (OSC over TCP) | A control-surface driver that runs inside eMotion LV1, like Waves' own LV1 Control and Mackie drivers                  |
-| Install on the desk | Nothing                                                  | The driver, from a page served by this module (Windows and macOS)                                                      |
-| Reach               | What MyRemote exposes                                    | The whole desk: flips without a page change, plugins and racks, Talk Back, every eMotion shortcut function, VU meters… |
+|                     | **MyRemote**                                             | **Companion Surface**                                                                                                           |
+| ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| What it is          | The protocol of Waves' MyFOH / MyMon apps (OSC over TCP) | A control-surface driver that runs inside eMotion LV1, like Waves' own LV1 Control and Mackie drivers                           |
+| Install on the desk | Nothing                                                  | The driver, from a page served by this module (Windows and macOS)                                                               |
+| Reach               | What MyRemote exposes                                    | Everything MyRemote mode does, plus flips without a page change, plugins and racks, every eMotion shortcut function, VU meters… |
 
 Both are maintained. Existing connections stay on MyRemote.
 
@@ -93,12 +93,20 @@ desk reports and their names follow it live.
 | Strips    | Channels, groups, FX and Monitor buses, matrices, links, LR, Center, Mono: fader in dB with fades, mute, solo   |
 | Mutes     | Desk-style mute feedback (blinks when muted by a mute group, Mute All or a Link), Mute All, mute groups         |
 | Flips     | Sends on fader to any FX / Monitor send, for Mixer 1, Mixer 2 and the All page; eMotion keeps its page          |
-| Talk Back | TALK and the Talk Back presets, as in eMotion's panel                                                           |
+| Pan       | Pan / balance, stereo width and rotation of any strip, with fades                                               |
+| Sends     | To FX and Monitor buses: on / off, level in dB with fades, pan                                                  |
+| Talk Back | TALK, the Talk Back presets and the destinations, as in eMotion's panel                                         |
+| Input     | Preamp gain, +48 V, digital trim and polarity (on the input bank each channel uses)                             |
 | Plugins   | Any parameter of any plugin in a rack, by plugin and parameter name, with fades; slot bypass 1-8; rack In / Out |
 | eMotion   | Every shortcut function (scenes, lock, clear solo, tap tempo, recording, save session, navigation…)             |
+| Scenes    | Recall by name from the session's list, a button per scene; Spill for Mixer 1 / 2; renaming a strip             |
+| Routes    | Internal routes: group buses, Links (DCA), mute group membership, LR / Center / Mono, matrices                  |
+| User keys | MyRemote's 16 user keys, with their label and function as variables                                             |
+| Colours   | eMotion's track colours on the buttons                                                                          |
 | Keyboard  | Ctrl / Alt / Shift held on the eMotion computer (Windows), momentary or toggle                                  |
 | Meters    | VU level 0-100 for a Gauge element; flip presets carry one                                                      |
-| Variables | Strip names, faders, mutes, solos; flips per mixer; scene, session, tempo, lock, recording, solo, Talk Back     |
+| Variables | Like MyRemote mode: names, faders, mutes, solos, pan, colours, input section, scenes, mute groups, flips, page, |
+|           | layer, eMotion version, user keys; VU for every strip as an option                                              |
 
 The driver also adds a few things to eMotion itself, each one optional in its
 settings window: an image per session while eMotion is locked, Ctrl + Alt + drag
