@@ -20,7 +20,16 @@ import {
 } from './surface-model.js'
 import { controlKey } from './surface-client.js'
 import { trackColorHex } from './surface-parity.js'
-import { FN_FLIP_SENDS, FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
+import {
+	FN_FLIP_SENDS,
+	FN_TB_PRESET,
+	HOT_SCENE_CHOICES,
+	MIXER_VIEW_CHOICES,
+	MODULE_CHOICES,
+	SURFACE_FUNCTIONS,
+	TAB_CHOICES,
+	TOP_MODE_CHOICES,
+} from './surface-functions.js'
 
 /** MyRemote's own user keys live on eMotion's surface 5. */
 const MYREMOTE_SURFACE = 5
@@ -42,12 +51,41 @@ function userKeyText(
 		const aux = trackName(d.tt, d.ti)
 		return { short: aux, full: `Flip Sends: ${mixer}: ${aux}` }
 	}
-	if (d.action === FN_TB_PRESET) return { short: `TB ${d.sel}`, full: `Talk Back: Preset ${d.sel}` }
+	if (d.action === FN_TB_PRESET) {
+		const preset = d.sel === 0 ? 'All' : `Preset ${d.sel}`
+		return { short: `TB ${d.sel === 0 ? 'All' : d.sel}`, full: `Talk Back: ${preset}` }
+	}
 	const fn = SURFACE_FUNCTIONS.find((f) => f.id === d.action)
 	const name = fn?.name ?? `Function ${d.action}`
+	const pick = (list: { id: string; label: string }[], v: number) => list.find((c) => c.id === String(v))?.label ?? ''
 	const parts: string[] = []
-	if (fn && (fn.param === 'track' || fn.param === 'track+number')) parts.push(trackName(d.tt, d.ti))
-	if (fn && (fn.param === 'number' || fn.param === 'track+number') && d.sel >= 0) parts.push(String(d.sel))
+	switch (fn?.target) {
+		case 'track':
+		case 'aux':
+			parts.push(trackName(d.tt, d.ti))
+			break
+		case 'module':
+			parts.push(trackName(d.tt, d.ti), pick(MODULE_CHOICES, d.sel))
+			break
+		case 'muteGroup':
+			if (d.ti >= 0) parts.push(`MG ${d.ti + 1}`)
+			break
+		case 'mixer':
+			parts.push(pick(MIXER_VIEW_CHOICES, d.sel))
+			break
+		case 'topMode':
+			parts.push(pick(MIXER_VIEW_CHOICES, d.sel), pick(TOP_MODE_CHOICES, d.ti))
+			break
+		case 'tab':
+			parts.push(pick(TAB_CHOICES, d.sel))
+			break
+		case 'hotScene':
+			parts.push(pick(HOT_SCENE_CHOICES, d.sel))
+			break
+		case 'scene':
+			if (d.sel >= 0) parts.push(m.sceneList[d.sel] || `Scene ${d.sel + 1}`)
+			break
+	}
 	const detail = parts.filter(Boolean).join(' ')
 	return { short: detail || name.replace(/^[^:]*:\s*/, ''), full: detail ? `${name}: ${detail}` : name }
 }
@@ -81,7 +119,7 @@ function button(
 
 const fn = (id: number) => ({
 	actionId: 'surfaceFunction',
-	options: { fn: String(id), strip: '0:0', number: '1', phase: 'tap' },
+	options: { fn: String(id), strip: '0:0', module: '4', view: '0', phase: 'tap' },
 })
 
 /** Modifier keys held on the eMotion computer (real key presses: Ctrl and Alt together work). */
@@ -454,6 +492,38 @@ export function surfacePresets(self: LV1Instance): Record<string, Preset> {
 		])
 	}
 
+	// ── INPUTS / MIX layers of each mixer (80-channel mode) ──
+	for (const m of SURFACE_MIXERS.filter((x) => x.id !== 'all')) {
+		for (const layer of ['inputs', 'mix'] as const) {
+			presets[`mixlayer_${m.id}_${layer}`] = button(
+				'Mixer mode presets',
+				`${m.label}: ${layer === 'mix' ? 'MIX' : 'INPUTS'} layers`,
+				`${m.id === 'm1' ? 'MX1' : 'MX2'}\n${layer === 'mix' ? 'MIX' : 'INPUTS'}`,
+				[{ actionId: 'surfaceMixLayer', options: { mixer: m.id, layer } }],
+				[{ feedbackId: 'surfaceMixLayer', options: { mixer: m.id, layer }, style: { bgcolor: BLUE, color: WHITE } }],
+			)
+		}
+	}
+
+	// ── Modes presets of each mixer, with the session's names ──
+	for (const m of SURFACE_MIXERS.filter((x) => x.id !== 'all')) {
+		self.surfaceModel.modeNames.forEach((name, i) => {
+			presets[`mode_${m.id}_${i + 1}`] = button(
+				'Mixer mode presets',
+				`${m.label}: ${name}`,
+				`${m.id === 'm1' ? 'MX1' : 'MX2'}\n$(${label}:mode_preset_${i + 1}_name)`,
+				[{ actionId: 'surfaceModePreset', options: { mixer: m.id, preset: String(i + 1) } }],
+				[
+					{
+						feedbackId: 'surfaceModePreset',
+						options: { mixer: m.id, preset: String(i + 1) },
+						style: { bgcolor: BLUE, color: WHITE },
+					},
+				],
+			)
+		})
+	}
+
 	// ── Scenes of the session, by name ──
 	self.surfaceModel.sceneList.forEach((_name, i) => {
 		presets[`scene_${i + 1}`] = button(
@@ -523,6 +593,20 @@ export function surfaceVariableDefinitions(self: LV1Instance): Array<{ variableI
 		{ variableId: 'session', name: 'Session name' },
 		{ variableId: 'session_dirty', name: 'Session has unsaved changes (yes / no)' },
 		{ variableId: 'scene_count', name: 'Number of scenes in the session' },
+		{
+			variableId: 'mixer1_layers',
+			name: 'Mixer 1 INPUT / MIX layers shown (INPUTS, MIX; empty outside 80-channel mode)',
+		},
+		{
+			variableId: 'mixer2_layers',
+			name: 'Mixer 2 INPUT / MIX layers shown (INPUTS, MIX; empty outside 80-channel mode)',
+		},
+		{ variableId: 'mixer1_mode_preset', name: 'Mixer 1 Modes preset (name)' },
+		{ variableId: 'mixer2_mode_preset', name: 'Mixer 2 Modes preset (name)' },
+		...Array.from({ length: 8 }, (_, i) => ({
+			variableId: `mode_preset_${i + 1}_name`,
+			name: `Modes preset ${i + 1} name`,
+		})),
 		{ variableId: 'channels_total', name: 'Input channels on the desk' },
 		{ variableId: 'auxes_total', name: 'Aux buses (FX + Monitor) on the desk' },
 		{ variableId: 'console_version', name: 'eMotion LV1 version' },
@@ -615,6 +699,19 @@ export function surfaceVariableValues(self: LV1Instance): Record<string, string>
 	v.session_dirty = yesNo(g.sessionDirty)
 	if (g.scene != null && !v.scene_name) v.scene_name = m.sceneList[g.scene] ?? ''
 	v.scene_count = m.sceneList.length ? String(m.sceneList.length) : ''
+	const modeName = (view: number) => {
+		const id = m.modePresets.get(view)
+		return id ? (m.modeNames[id - 1] ?? String(id)) : ''
+	}
+	const layers = (view: number) => {
+		const l = m.mixLayers.get(view)
+		return l?.active ? (l.mix ? 'MIX' : 'INPUTS') : ''
+	}
+	v.mixer1_layers = layers(0)
+	v.mixer2_layers = layers(1)
+	v.mixer1_mode_preset = modeName(0)
+	v.mixer2_mode_preset = modeName(1)
+	m.modeNames.forEach((name, i) => (v[`mode_preset_${i + 1}_name`] = name))
 	m.sceneList.forEach((name, i) => (v[`scene_${i + 1}_name`] = name))
 	v.channels_total = String(m.list(0).length)
 	v.auxes_total = String(m.list(2).length + m.list(25).length)

@@ -97,7 +97,7 @@ function legs(option: unknown): number[] {
 	return option === '0' ? [0] : option === '1' ? [1] : [0, 1]
 }
 
-function sceneChoices(self: LV1Instance): Array<{ id: string; label: string }> {
+export function sceneChoices(self: LV1Instance): Array<{ id: string; label: string }> {
 	const list = self.surfaceModel.sceneList
 	if (!list.length) return [{ id: '0', label: 'Scene 1 (the desk has not sent its scene list yet)' }]
 	return list.map((name, i) => ({ id: String(i), label: `${i + 1}. ${name || '(no name)'}` }))
@@ -443,6 +443,69 @@ export function parityActions(self: LV1Instance): CompanionActionDefinitions {
 				self.surfaceSpill(view)
 			},
 		},
+
+		surfaceMixLayer: {
+			name: 'Mixer: INPUTS / MIX layers',
+			description:
+				'Show the INPUTS or the MIX layers of Mixer 1 or Mixer 2, like its INPUTS and MIX buttons (80-channel mode; the ' +
+				'eMotion shortcut only toggles between them).',
+			options: [
+				{
+					type: 'dropdown',
+					id: 'mixer',
+					label: 'Mixer',
+					default: 'm1',
+					choices: SURFACE_MIXERS.filter((m) => m.id !== 'all').map((m) => ({ id: m.id, label: m.label })),
+				},
+				{
+					type: 'dropdown',
+					id: 'layer',
+					label: 'Layers',
+					default: 'inputs',
+					choices: [
+						{ id: 'inputs', label: 'INPUTS' },
+						{ id: 'mix', label: 'MIX' },
+					],
+				},
+			],
+			callback: async (a) => {
+				const view = SURFACE_MIXERS.find((m) => m.id === a.options.mixer)?.surface ?? 0
+				self.surfaceSetMixLayer(view, a.options.layer === 'mix')
+			},
+		},
+
+		surfaceModePreset: {
+			name: 'Mixer: Mode preset (recall)',
+			description:
+				'Recall one of the 8 Modes presets of Mixer 1 or Mixer 2 (Home, Setup, SndChk…, with the names of the session), ' +
+				'as a click in that mixer’s Modes panel.',
+			options: [
+				{
+					type: 'dropdown',
+					id: 'mixer',
+					label: 'Mixer',
+					default: 'm1',
+					choices: SURFACE_MIXERS.filter((m) => m.id !== 'all').map((m) => ({ id: m.id, label: m.label })),
+				},
+				modePresetField(self),
+			],
+			callback: async (a) => {
+				const view = SURFACE_MIXERS.find((m) => m.id === a.options.mixer)?.surface ?? 0
+				const preset = parseInt(optionText(a.options.preset), 10)
+				if (preset >= 1 && preset <= 8) self.surfaceRecallModePreset(view, preset)
+			},
+		},
+	}
+}
+
+/** Modes presets 1-8 with the session's names. */
+function modePresetField(self: LV1Instance): AnyOpt {
+	return {
+		type: 'dropdown',
+		id: 'preset',
+		label: 'Mode preset',
+		default: '1',
+		choices: self.surfaceModel.modeNames.map((name, i) => ({ id: String(i + 1), label: `${i + 1}. ${name}` })),
 	}
 }
 
@@ -595,6 +658,56 @@ export function parityFeedbacks(self: LV1Instance): CompanionFeedbackDefinitions
 				},
 			],
 			callback: (fb) => self.surfaceModel.gui.page === fb.options.page,
+		},
+		surfaceMixLayer: {
+			type: 'boolean',
+			name: 'Mixer: INPUTS / MIX layers shown',
+			description: 'True while that mixer shows those layers (80-channel mode).',
+			defaultStyle: { bgcolor: BLUE, color: WHITE },
+			options: [
+				{
+					type: 'dropdown',
+					id: 'mixer',
+					label: 'Mixer',
+					default: 'm1',
+					choices: SURFACE_MIXERS.filter((m) => m.id !== 'all').map((m) => ({ id: m.id, label: m.label })),
+				},
+				{
+					type: 'dropdown',
+					id: 'layer',
+					label: 'Layers',
+					default: 'inputs',
+					choices: [
+						{ id: 'inputs', label: 'INPUTS' },
+						{ id: 'mix', label: 'MIX' },
+					],
+				},
+			],
+			callback: (fb) => {
+				const view = SURFACE_MIXERS.find((m) => m.id === fb.options.mixer)?.surface ?? 0
+				const l = self.surfaceModel.mixLayers.get(view)
+				return !!l && l.active && l.mix === (fb.options.layer === 'mix')
+			},
+		},
+		surfaceModePreset: {
+			type: 'boolean',
+			name: 'Mixer: Mode preset is',
+			description: 'True while that mixer shows that Modes preset.',
+			defaultStyle: { bgcolor: BLUE, color: WHITE },
+			options: [
+				{
+					type: 'dropdown',
+					id: 'mixer',
+					label: 'Mixer',
+					default: 'm1',
+					choices: SURFACE_MIXERS.filter((m) => m.id !== 'all').map((m) => ({ id: m.id, label: m.label })),
+				},
+				modePresetField(self),
+			],
+			callback: (fb) => {
+				const view = SURFACE_MIXERS.find((m) => m.id === fb.options.mixer)?.surface ?? 0
+				return self.surfaceModel.modePresets.get(view) === parseInt(optionText(fb.options.preset), 10)
+			},
 		},
 	}
 }

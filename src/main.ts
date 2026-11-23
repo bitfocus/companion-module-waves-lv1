@@ -44,6 +44,7 @@ import { SurfaceClient, controlKey, type ControlAddress, type ControlUpdate } fr
 import { SURFACE_DEFAULT_PORT, SURFACE_DRIVER_VERSION, compareVersions, surfaceInstallPage } from './surface.js'
 import {
 	SurfaceModel,
+	DEFAULT_MODE_NAMES,
 	MUTE_ALL,
 	MUTE_GROUPS,
 	RACK_SLOTS,
@@ -548,6 +549,10 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			s.requestScenes()
 			// Driver 0.1.25+: the user key definitions eMotion announced (MyRemote's keys among them).
 			s.write('ukdata')
+			// Driver 0.1.27+: the Modes preset each mixer shows, and the session's preset names.
+			s.write('modepreset')
+			s.write('mixlayer')
+			this.surfaceRequestModeNames(0)
 			for (const key of this.surfaceMeterRefs.keys()) {
 				const [tt, track] = key.split('.').map(Number)
 				s.registerMeters(tt, track, METER_OUT_MASK)
@@ -624,6 +629,15 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			this.surfaceModel.routes.set(surfaceRouteKey(r.srcTt, r.srcTrack, r.dstTt, r.dstTrack), r.on)
 			this.checkFeedbacks('surfaceRouted')
 		})
+		s.on('modeNames', (names: string[]) => {
+			if (this.surfaceModeNamesTimer) clearTimeout(this.surfaceModeNamesTimer)
+			this.surfaceModeNamesTimer = null
+			const next = names.map((n, i) => n || DEFAULT_MODE_NAMES[i])
+			if (next.join('\n') === this.surfaceModel.modeNames.join('\n')) return
+			this.surfaceModel.modeNames = next
+			this.scheduleSurfaceDefinitions()
+			this.scheduleSurfaceVariables()
+		})
 		s.on('appinfo', (version: string) => {
 			this.surfaceModel.appVersion = version
 			this.scheduleSurfaceVariables()
@@ -637,11 +651,13 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			)
 				this.surfaceScheduleScenes()
 			if (sig.name === 'assignmentsChanged') this.surfaceRereadRoutes()
+			if (sig.name === 'modePreset') this.surface?.requestModeNames()
 			if (sig.name === 'userKeyDataNotified') {
 				if (this.surfaceModel.applyUserKeyData(sig.args)) this.scheduleSurfaceVariables()
 				return
 			}
 			if (sig.name === 'currentSessionNameChanged') {
+				this.surfaceRequestModeNames(0, 3000)
 				// Loading a session clears the shortcuts registered on our surface: register again.
 				this.surfaceKeys.clear()
 				this.nextSurfaceSlot = 1
@@ -665,7 +681,21 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			this.log('warn', rejected)
 			this.reportStatus()
 		})
-		s.on('driverError', (msg: string) => this.log('warn', `Companion Surface: ${msg}`))
+		s.on('driverError', (msg: string) => {
+			// The driver looks for eMotion's mixer views the first time (a few seconds): ask again then.
+			if (/^(busy|unsupported) modenames/.test(msg)) {
+				if (msg.startsWith('busy')) this.surfaceRequestModeNames(this.surfaceModeNamesTries + 1)
+				return
+			}
+			if (msg.startsWith('busy modepreset') || msg.startsWith('busy mixlayer')) {
+				this.log(
+					'info',
+					"Companion Surface is still looking for eMotion's mixer views — press the Mode preset button again in a few seconds",
+				)
+				return
+			}
+			this.log('warn', `Companion Surface: ${msg}`)
+		})
 		s.on('error', (err: Error) => {
 			// Warn once per outage; the retries after that only go to debug.
 			this.log(failing ? 'debug' : 'warn', `Companion Surface ${host}:${port}: ${err.message} — retrying`)
@@ -693,10 +723,15 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 	private surfaceStartNameRefresh(s: SurfaceClient): void {
 		this.surfaceStopNameRefresh()
 		const read = () => {
-			if (s.isReady()) for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+			if (!s.isReady()) return
+			for (const a of this.surfaceModel.probeAddresses()) s.getx(a)
+			// The scene list too: asked at connect, it is empty while eMotion is still loading the session.
+			s.requestScenes()
 		}
 		for (const ms of [5000, 15000, 30000]) this.surfaceNameTimers.push(setTimeout(read, ms))
 		this.surfaceNameTimers.push(setInterval(read, 60000))
+		// Modes preset names can be edited in eMotion at any time (driver 0.1.27+; nothing is sent when they change).
+		this.surfaceNameTimers.push(setInterval(() => s.isReady() && s.requestModeNames(), 15000))
 	}
 
 	private surfaceStopNameRefresh(): void {
@@ -837,6 +872,43 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 			return
 		}
 		this.surfaceFade(key, from, value, fade, apply)
+	}
+
+	/** Modes preset names: asked again while the driver is still looking for the mixer views. */
+	private surfaceModeNamesTimer: NodeJS.Timeout | null = null
+	private surfaceModeNamesTries = 0
+	surfaceRequestModeNames(tries: number, delayMs = 0): void {
+		if (this.surfaceModeNamesTimer) clearTimeout(this.surfaceModeNamesTimer)
+		this.surfaceModeNamesTimer = null
+		this.surfaceModeNamesTries = tries
+		if (tries > 6) return
+		const ask = () => {
+			this.surfaceModeNamesTimer = null
+			this.surface?.requestModeNames()
+		}
+		const wait = tries > 0 ? 8000 : delayMs
+		if (wait > 0) this.surfaceModeNamesTimer = setTimeout(ask, wait)
+		else ask()
+	}
+
+	/** INPUTS or MIX layers of Mixer 1 (view 0) / Mixer 2 (view 1), in 80-channel mode. */
+	surfaceSetMixLayer(view: number, mix: boolean): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		s.mixLayer(view, mix)
+	}
+
+	/** Recall a Modes preset (1-8) in Mixer 1 (view 0) or Mixer 2 (view 1). */
+	surfaceRecallModePreset(view: number, preset: number): void {
+		const s = this.surface
+		if (!s?.isReady()) {
+			this.log('warn', 'Companion Surface is not connected — action ignored')
+			return
+		}
+		s.recallModePreset(view, preset)
 	}
 
 	/** An internal route's state, as last read; asks the desk once when unknown. */
@@ -1342,6 +1414,8 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 		this.surfaceScenesTimer = null
 		if (this.surfaceVuTimer) clearTimeout(this.surfaceVuTimer)
 		this.surfaceVuTimer = null
+		if (this.surfaceModeNamesTimer) clearTimeout(this.surfaceModeNamesTimer)
+		this.surfaceModeNamesTimer = null
 		for (const t of this.surfaceRealTimers.values()) clearTimeout(t)
 		this.surfaceRealTimers.clear()
 		this.surfaceStopNameRefresh()
@@ -1403,6 +1477,8 @@ export class LV1Instance extends InstanceBase<ModuleSchema> {
 				'surfaceColor',
 				'surfaceSceneIs',
 				'surfacePage',
+				'surfaceModePreset',
+				'surfaceMixLayer',
 			)
 		}, 30)
 	}
