@@ -105,7 +105,7 @@ export interface SurfaceClientOptions {
  * Events: 'ready' (version), 'control' (ControlUpdate, from ctl and val lines),
  * 'intermap' (InterMapMessage, after `sub im 1`), 'real' (RealUpdate), 'props' (ControlProps),
  * 'signal' (EmotionSignal), 'scenes' (string[], the session's scene names), 'appinfo' (version),
- * 'route' (RouteUpdate),
+ * 'route' (RouteUpdate), 'modeNames' (string[8], the session's Modes preset names),
  * 'driverError' (message), 'authFailed', 'close', 'error' (Error).
  */
 export class SurfaceClient extends EventEmitter {
@@ -168,6 +168,23 @@ export class SurfaceClient extends EventEmitter {
 	requestScenes(): void {
 		this.write('scenes')
 	}
+
+	/** The session's Modes preset names; answered with a 'modeNames' event. Driver 0.1.27+ (Windows). */
+	requestModeNames(): void {
+		this.write('modenames')
+	}
+
+	/** INPUTS (false) or MIX (true) layers of a mixer view in 80-channel mode. Driver 0.1.27+ (Windows). */
+	mixLayer(view: number, mix: boolean): void {
+		this.write(`mixlayer ${view} ${mix ? 1 : 0}`)
+	}
+
+	/** Recall a Modes preset (1-8) in a mixer view (0 Mixer 1, 1 Mixer 2). Driver 0.1.27+ (Windows). */
+	recallModePreset(view: number, preset: number): void {
+		this.write(`modepreset ${view} ${preset}`)
+	}
+
+	private modeNames: string[] = []
 
 	/** Read an internal route (Patch > Internal); answered with a 'route' event. Driver 0.1.25+. */
 	routeGet(srcTt: number, srcTrack: number, dstTt: number, dstTrack: number): void {
@@ -333,6 +350,19 @@ export class SurfaceClient extends EventEmitter {
 			case 'appinfo':
 				this.emit('appinfo', parts.slice(1).join(' '))
 				return
+			case 'modename': {
+				// modename <id 1-8> <name…>: one Modes preset of the session, asked for with `modenames`
+				const id = parseInt(parts[1], 10)
+				if (id >= 1 && id <= 8) this.modeNames[id - 1] = parts.slice(2).join(' ')
+				return
+			}
+			case 'modenames': {
+				// modenames <count>: the end of the list (count < 1: none read)
+				const names = parseInt(parts[1], 10) > 0 ? this.modeNames.slice(0, 8) : null
+				this.modeNames = []
+				if (names) this.emit('modeNames', names)
+				return
+			}
 			case 'route': {
 				this.answered()
 				// route <srcTt> <srcTrack> <dstTt> <dstTrack> <rc> <1|0|-1>

@@ -6,8 +6,19 @@ import { CompanionActionDefinitions, CompanionFeedbackDefinitions, combineRgb } 
 import type { LV1Instance } from './main.js'
 import { optionText } from './definitions.js'
 import { SurfaceControls } from './surface.js'
-import { SURFACE_MIXERS, TB_PRESET } from './surface-model.js'
-import { FN_TB_PRESET, SURFACE_FUNCTIONS } from './surface-functions.js'
+import { MUTE_GROUP_TT, SURFACE_MIXERS, TB_PRESET } from './surface-model.js'
+import {
+	FN_TB_PRESET,
+	HOT_SCENE_CHOICES,
+	MIXER_VIEW_CHOICES,
+	MODULE_CHOICES,
+	MUTE_GROUP_CHOICES,
+	SURFACE_FUNCTIONS,
+	TAB_CHOICES,
+	TOP_MODE_CHOICES,
+	type FunctionTarget,
+	type SurfaceFunction,
+} from './surface-functions.js'
 import {
 	SLOT_CHOICES,
 	auxField,
@@ -21,7 +32,37 @@ import {
 	type AnyOpt,
 } from './surface-ui.js'
 import { featureActions, featureFeedbacks } from './surface-features.js'
-import { parityActions, parityFeedbacks } from './surface-parity.js'
+import { parityActions, parityFeedbacks, sceneChoices } from './surface-parity.js'
+
+/** A function's SelectionIndex and target track from the action's options (-1 = unused). */
+function functionArgs(f: SurfaceFunction, o: Record<string, unknown>): { sel: number; tt: number; track: number } {
+	const num = (v: unknown) => {
+		const n = parseInt(optionText(v), 10)
+		return Number.isFinite(n) ? n : 0
+	}
+	switch (f.target) {
+		case 'track':
+			return { sel: -1, ...parseStrip(o.strip) }
+		case 'module':
+			return { sel: num(o.module), ...parseStrip(o.strip) }
+		case 'aux':
+			return { sel: -1, ...parseStrip(o.aux) }
+		case 'muteGroup':
+			return { sel: -1, tt: MUTE_GROUP_TT, track: num(o.muteGroup) }
+		case 'mixer':
+			return { sel: num(o.view), tt: -1, track: -1 }
+		case 'topMode':
+			return { sel: num(o.view), tt: -1, track: num(o.topMode) }
+		case 'tab':
+			return { sel: num(o.tab), tt: -1, track: -1 }
+		case 'hotScene':
+			return { sel: num(o.hotScene), tt: -1, track: -1 }
+		case 'scene':
+			return { sel: num(o.scene), tt: -1, track: -1 }
+		default:
+			return { sel: -1, tt: -1, track: -1 }
+	}
+}
 
 function phaseField(): AnyOpt {
 	return {
@@ -43,8 +84,8 @@ function phaseField(): AnyOpt {
 
 export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 	const fnChoices = SURFACE_FUNCTIONS.map((f) => ({ id: String(f.id), label: f.name }))
-	const fnWith = (kinds: string[]) =>
-		SURFACE_FUNCTIONS.filter((f) => kinds.includes(f.param))
+	const fnWith = (kinds: FunctionTarget[]) =>
+		SURFACE_FUNCTIONS.filter((f) => kinds.includes(f.target))
 			.map((f) => `$(options:fn) == '${f.id}'`)
 			.join(' || ')
 
@@ -136,23 +177,73 @@ export function surfaceActions(self: LV1Instance): CompanionActionDefinitions {
 				'navigation, mute groups, Lock, Clear Solo, recording…',
 			options: [
 				{ type: 'dropdown', id: 'fn', label: 'Function', default: fnChoices[0].id, choices: fnChoices },
-				{ ...stripField(self), isVisibleExpression: fnWith(['track', 'track+number']) },
+				{ ...stripField(self), isVisibleExpression: fnWith(['track', 'module']) },
 				{
-					...buildNumberExprField('number', 'Number (scene, preset, slot… — see the function)', 1, 'Variables OK.'),
-					isVisibleExpression: fnWith(['number', 'track+number']),
+					type: 'dropdown',
+					id: 'module',
+					label: 'EQ, Dynamics, Filter or plugin slot',
+					default: '4',
+					choices: MODULE_CHOICES,
+					isVisibleExpression: fnWith(['module']),
+				},
+				{ ...auxField(self), isVisibleExpression: fnWith(['aux']) },
+				{
+					type: 'dropdown',
+					id: 'muteGroup',
+					label: 'Mute group',
+					default: '0',
+					choices: MUTE_GROUP_CHOICES,
+					isVisibleExpression: fnWith(['muteGroup']),
+				},
+				{
+					type: 'dropdown',
+					id: 'view',
+					label: 'Mixer',
+					default: '0',
+					choices: MIXER_VIEW_CHOICES,
+					isVisibleExpression: fnWith(['mixer', 'topMode']),
+				},
+				{
+					type: 'dropdown',
+					id: 'topMode',
+					label: 'Top bay mode',
+					default: '0',
+					choices: TOP_MODE_CHOICES,
+					isVisibleExpression: fnWith(['topMode']),
+				},
+				{
+					type: 'dropdown',
+					id: 'tab',
+					label: 'Tab',
+					default: '0',
+					choices: TAB_CHOICES,
+					isVisibleExpression: fnWith(['tab']),
+				},
+				{
+					type: 'dropdown',
+					id: 'hotScene',
+					label: 'Hot scene',
+					default: '0',
+					choices: HOT_SCENE_CHOICES,
+					isVisibleExpression: fnWith(['hotScene']),
+				},
+				{
+					type: 'dropdown',
+					id: 'scene',
+					label: 'Scene',
+					default: '0',
+					choices: sceneChoices(self),
+					isVisibleExpression: fnWith(['scene']),
 				},
 				phaseField(),
 			],
-			callback: async (a, context) => {
+			callback: async (a) => {
 				const id = parseInt(optionText(a.options.fn), 10)
 				const f = SURFACE_FUNCTIONS.find((x) => x.id === id)
 				if (!f) return
-				const needsTrack = f.param === 'track' || f.param === 'track+number'
-				const needsNumber = f.param === 'number' || f.param === 'track+number'
-				const { tt, track } = needsTrack ? parseStrip(a.options.strip) : { tt: -1, track: -1 }
-				const number = needsNumber ? Math.round(await resolveNumberAsync(a.options, 'number', context, 1)) : -1
+				const { sel, tt, track } = functionArgs(f, a.options)
 				const phase = (optionText(a.options.phase) || 'tap') as 'tap' | 'down' | 'up' | 'toggle'
-				self.surfaceRunFunction(f.id, number, tt, track, phase)
+				self.surfaceRunFunction(f.id, sel, tt, track, phase)
 			},
 		},
 

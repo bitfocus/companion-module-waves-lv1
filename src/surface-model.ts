@@ -116,6 +116,9 @@ export const send = {
 	}),
 }
 
+/** eMotion's Modes presets in a new session (each can be renamed in the session). */
+export const DEFAULT_MODE_NAMES = ['Home', 'Setup', 'SndChk', 'Edit', 'Fx', 'Monitor', 'Status', 'Dugan']
+
 /** Key of an internal route in SurfaceModel.routes. */
 export const surfaceRouteKey = (srcTt: number, srcTrack: number, dstTt: number, dstTrack: number): string =>
 	`${srcTt}.${srcTrack}>${dstTt}.${dstTrack}`
@@ -328,6 +331,12 @@ export class SurfaceModel {
 	appVersion = ''
 	/** Layer each mixer view shows (0-based), key = view surface. */
 	layers = new Map<number, number>()
+	/** INPUT / MIX layers of each mixer view (80-channel mode), key = view. */
+	mixLayers = new Map<number, { active: boolean; mix: boolean }>()
+	/** Modes preset (1-8) each mixer view shows, key = view (0 Mixer 1, 1 Mixer 2). */
+	modePresets = new Map<number, number>()
+	/** The session's Modes preset names (eMotion's defaults until the desk sent them). */
+	modeNames: string[] = [...DEFAULT_MODE_NAMES]
 	/** Internal routes read from the desk, key surfaceRouteKey(). */
 	routes = new Map<string, boolean>()
 	/** User key definitions eMotion announced (userKeyDataNotified), key `${surface}.${index}`. */
@@ -358,6 +367,8 @@ export class SurfaceModel {
 		this.sceneList = []
 		this.layers.clear()
 		this.routes.clear()
+		this.modePresets.clear()
+		this.mixLayers.clear()
 		this.userKeys.clear()
 	}
 
@@ -443,6 +454,22 @@ export class SurfaceModel {
 			case 'pageShown':
 				this.gui.page = t(0)
 				return 'page'
+			case 'mixLayer': {
+				const view = n(0)
+				if (view == null) return null
+				const next = { active: b(1), mix: b(2) }
+				const prev = this.mixLayers.get(view)
+				if (prev && prev.active === next.active && prev.mix === next.mix) return null
+				this.mixLayers.set(view, next)
+				return 'modes'
+			}
+			case 'modePreset': {
+				const view = n(0)
+				const preset = n(1)
+				if (view == null || preset == null || this.modePresets.get(view) === preset) return null
+				this.modePresets.set(view, preset)
+				return 'modes'
+			}
 			case 'userKeyLight': {
 				const i = n(0)
 				if (i != null) this.gui.userKeyLights.set(i, b(1))

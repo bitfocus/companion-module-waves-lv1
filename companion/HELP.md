@@ -254,12 +254,19 @@ With it the module does everything over the network, without MyRemote:
   (on the input bank, A or B, each channel uses)
 - **eMotion plugins**: any parameter, picked by plugin and parameter name, with
   fades; slot bypass (slots 1-8) and rack In / Out
-- **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…), and
-  **MyRemote's own 16 user keys** (as set up for MyRemote in eMotion)
+- **Every eMotion shortcut function** (scenes, lock, recording, tap tempo…), with
+  the same choices as eMotion's user-key menu (EQ / Dynamics / Filter / plugin slot,
+  Mixer 1 / 2, tab, top bay mode, mute group, aux, scene), and **MyRemote's own 16
+  user keys** (as set up for MyRemote in eMotion)
 - **Scenes** picked by name from the session's list, with a feedback and a
   button per scene; **Spill** for Mixer 1 / 2; **renaming** a strip
 - **Internal routes** (Patch > Internal): group buses, Links (DCA), mute group
   membership, LR / Center / Mono and matrices, with a feedback (aux = the send)
+- **Modes presets** of Mixer 1 / 2 (Home, Setup, SndChk… with the session's
+  names), recalled as a click in the mixer's Modes panel, with a feedback and a
+  button per preset; **INPUTS / MIX** layers of 80-channel mode as two separate
+  buttons (eMotion's shortcut only toggles). Windows only: on macOS the current
+  preset is shown, recalling is not available yet
 - **Ctrl / Alt / Shift** held on the eMotion computer like its keyboard (momentary
   or toggle presets): Ctrl and Alt together work, so Ctrl + Alt + drag rotates a
   pan knob from the touch screen. Keys go up again when Companion disconnects

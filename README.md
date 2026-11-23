@@ -101,6 +101,7 @@ desk reports and their names follow it live.
 | eMotion   | Every shortcut function (scenes, lock, clear solo, tap tempo, recording, save session, navigation…)             |
 | Scenes    | Recall by name from the session's list, a button per scene; Spill for Mixer 1 / 2; renaming a strip             |
 | Routes    | Internal routes: group buses, Links (DCA), mute group membership, LR / Center / Mono, matrices                  |
+| Modes     | Modes presets of Mixer 1 / 2 by name, INPUTS / MIX layers as separate buttons (Windows; macOS shows the preset) |
 | User keys | MyRemote's 16 user keys, with their label and function as variables                                             |
 | Colours   | eMotion's track colours on the buttons                                                                          |
 | Keyboard  | Ctrl / Alt / Shift held on the eMotion computer (Windows), momentary or toggle                                  |
